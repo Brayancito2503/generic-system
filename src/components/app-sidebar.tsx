@@ -3,7 +3,6 @@
 import * as React from "react"
 
 import { NavMain } from "@/components/nav-main"
-import { NavProjects } from "@/components/nav-projects"
 import { NavUser } from "@/components/nav-user"
 import { TeamSwitcher } from "@/components/team-switcher"
 import {
@@ -14,20 +13,11 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar"
 import {
-  GalleryVerticalEndIcon,
-  AudioLinesIcon,
-  TerminalIcon,
-  TerminalSquareIcon,
-  BookOpenIcon,
   LayoutDashboardIcon,
-  UserIcon,
-  SquareUser,
-  ChefHatIcon,
-  CookingPotIcon,
   Store,
   Dumbbell,
 } from "lucide-react"
-import { ThemeToggle } from "./ui/theme-toggle"
+
 import { useTranslations } from "next-intl"
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
@@ -43,17 +33,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       {
         name: "Distribuidora San José",
         logo: <Store />,
-        plan: "Distribuidora Vertical",
-      },
-      {
-        name: "PowerFit Gym",
-        logo: <Dumbbell />,
-        plan: "Gimnasio Vertical",
-      },
-      {
-        name: "Generic System Core",
-        logo: <GalleryVerticalEndIcon />,
-        plan: "SaaS Multi-Tenant",
+        plan: "Distribución",
       },
     ],
     navMain: [
@@ -81,49 +61,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         hidden: false,
         disabled: false,
       },
-      {
-        title: t('customers'),
-        url: "/dashboard/customers",
-        icon: <SquareUser />,
-        isActive: false,
-        hidden: false,
-        disabled: false,
-      },
-      {
-        title: t('invoices'),
-        url: "/dashboard/invoices",
-        icon: <BookOpenIcon />,
-        isActive: false,
-        hidden: false,
-        disabled: false,
-      },
-      {
-        title: t('orders'),
-        url: "/dashboard/orders",
-        icon: <CookingPotIcon />,
-        isActive: false,
-        hidden: false,
-        disabled: false,
-      },
-      {
-        title: t('kitchen'),
-        url: "/dashboard/kitchen",
-        icon: <ChefHatIcon />,
-        isActive: false,
-        hidden: false,
-        disabled: false,
-      },
-      {
-        title: t('admin'),
-        url: "/dashboard/admin",
-        icon: <UserIcon />,
-        isActive: false,
-        hidden: false,
-        disabled: false,
-      },
     ],
   }
-
   return (
     <Sidebar collapsible="icon" {...props}>
       {/* Header del menú lateral */}

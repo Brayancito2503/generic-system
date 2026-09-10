@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
-import { AdminLoginForm, LoginForm, PosPinLogin } from "@/features/auth/components";
+import { AdminLoginForm, PosPinLogin } from "@/features/auth/components";
 import { useTranslations } from "next-intl";
 import { SelectLanguage } from "@/components/ui/selectLanguage";
 

@@ -4,13 +4,7 @@ import { prisma } from "@/infrastructure/db/prisma";
 
 const TENANT_SLUG = "distribuidora-sanjose";
 
-export default async function DistributionModulePage({
-    params,
-}: {
-    params: Promise<{ locale: string }>;
-}) {
-    const { locale } = await params;
-
+export default async function DistributionModulePage() {
     const tenant = await prisma.tenant.findUnique({
         where: { slug: TENANT_SLUG },
         select: { id: true, name: true },

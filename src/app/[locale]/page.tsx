@@ -2,8 +2,6 @@
 import { ArrowRightIcon } from "@heroicons/react/24/outline";
 import Link from "next/link";
 import { getTranslations } from "next-intl/server";
-import { SelectLanguage } from "@/components/ui/selectLanguage";
-import { Button } from "@/components/ui/button";
 
 export default async function Page() {
     const t = await getTranslations();

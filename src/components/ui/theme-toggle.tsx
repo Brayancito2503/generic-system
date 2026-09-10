@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 
 export function ThemeToggle({ className, variant = "default", text = "Theme" }: { className?: string, variant?: "default" | "menuItem", text?: string }) {
-    const { setTheme, theme } = useTheme()
+    const { setTheme } = useTheme()
 
     return (
         <DropdownMenu>

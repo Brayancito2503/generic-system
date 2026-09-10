@@ -20,7 +20,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { ChevronsUpDownIcon, SparklesIcon, BadgeCheckIcon, CreditCardIcon, BellIcon, LogOutIcon, GlobeIcon } from "lucide-react"
+import { ChevronsUpDownIcon, LogOutIcon } from "lucide-react"
 import { SelectLanguage } from "./ui/selectLanguage"
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
@@ -97,7 +97,7 @@ export function NavUser({
               <SelectLanguage />
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => router.push("/auth/login")}>
+            <DropdownMenuItem onClick={() => router.push("/login")}>
               <LogOutIcon
               />
               {t("logOut")}
