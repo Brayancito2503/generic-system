@@ -1,0 +1,339 @@
+// Prisma Schema for Generic System (SaaS Multi-Tenant Base + GYM Vertical)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Industry {
+  GENERIC
+  GYM
+  RESTAURANT
+  PHARMACY
+  RETAIL
+  DISTRIBUTION
+}
+
+enum Role {
+  SUPER_ADMIN
+  TENANT_ADMIN
+  STAFF
+  CUSTOMER
+}
+
+model Tenant {
+  id        String   @id @default(uuid())
+  slug      String   @unique
+  name      String
+  industry  Industry @default(GENERIC)
+  modules   String[] // ej: ["gym_memberships", "pos", "inventory"]
+  settings  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users         User[]
+  branches      Branch[]
+  persons       Person[]
+  items         Item[]
+  sales         Sale[]
+  memberships   GymMembership[]
+  gymAccessLogs GymAccessLog[]
+  suppliers     Supplier[]
+  purchaseOrders PurchaseOrder[]
+  employees     Employee[]
+  cashSessions  CashSession[]
+  taxRates      TaxRate[]
+  saleCounters  SaleCounter[]
+}
+
+model Branch {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  address   String?
+  createdAt DateTime @default(now())
+
+  inventories    Inventory[]
+  purchaseOrders PurchaseOrder[]
+  employees      Employee[]
+  cashSessions   CashSession[]
+
+  @@index([tenantId])
+}
+
+model User {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email     String
+  password  String
+  role      Role     @default(STAFF)
+  personId  String?  @unique
+  person    Person?  @relation(fields: [personId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model Person {
+  id         String   @id @default(uuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  firstName  String
+  lastName   String
+  email      String?
+  phone      String?
+  documentId String?
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  user          User?
+  sales         Sale[]
+  gymMembership GymMembership?
+  employee      Employee?
+
+  @@index([tenantId])
+  @@index([tenantId, documentId])
+}
+
+model Item {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sku         String?
+  name        String
+  description String?
+  cost        Decimal  @db.Decimal(10, 2)
+  price       Decimal  @db.Decimal(10, 2)
+  isService   Boolean  @default(false)
+  attributes  Json     @default("{}")
+  createdAt   DateTime @default(now())
+
+  inventory          Inventory[]
+  saleItems          SaleItem[]
+  purchaseOrderItems PurchaseOrderItem[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId])
+}
+
+model Inventory {
+  id       String @id @default(uuid())
+  tenantId String
+  itemId   String
+  item     Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  stock    Int    @default(0)
+  minAlert Int    @default(5)
+
+  @@unique([tenantId, itemId, branchId])
+}
+
+model Sale {
+  id            String   @id @default(uuid())
+  tenantId      String
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  personId      String?
+  person        Person?      @relation(fields: [personId], references: [id])
+  cashSessionId String?
+  cashSession   CashSession? @relation(fields: [cashSessionId], references: [id])
+  subtotal      Decimal  @db.Decimal(10, 2)
+  taxAmount     Decimal  @db.Decimal(10, 2) @default(0)
+  discount      Decimal  @db.Decimal(10, 2) @default(0)
+  total         Decimal  @db.Decimal(10, 2)
+  invoiceNumber String
+  notes         String?
+  status        String   @default("COMPLETED")
+  createdAt     DateTime @default(now())
+
+  items SaleItem[]
+
+  @@index([tenantId])
+  @@index([cashSessionId])
+  @@unique([tenantId, invoiceNumber])
+}
+
+model SaleCounter {
+  tenantId   String @id
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lastNumber Int    @default(0)
+}
+
+model SaleItem {
+  id       String  @id @default(uuid())
+  saleId   String
+  sale     Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  itemId   String
+  item     Item    @relation(fields: [itemId], references: [id])
+  quantity Int
+  price    Decimal @db.Decimal(10, 2)
+}
+
+// ==========================================
+// VERTICAL EXTENSION: GYM MODULE
+// ==========================================
+
+model GymMembership {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  personId  String   @unique
+  person    Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
+  planName  String
+  startDate DateTime
+  endDate   DateTime
+  status    String   @default("ACTIVE") // ACTIVE, EXPIRED, FROZEN, CANCELLED
+  createdAt DateTime @default(now())
+
+  accessLogs GymAccessLog[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+model GymAccessLog {
+  id           String        @id @default(uuid())
+  tenantId     String
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  membershipId String
+  membership   GymMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  accessTime   DateTime      @default(now())
+  granted      Boolean       @default(true)
+  denialReason String?
+
+  @@index([tenantId])
+  @@index([membershipId])
+}
+
+// ==========================================
+// VERTICAL EXTENSION: DISTRIBUTION MODULE
+// ==========================================
+
+model Supplier {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  contactName String?
+  phone       String?
+  email       String?
+  taxId       String?  // RTN / RUC / RFC
+  address     String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  purchaseOrders PurchaseOrder[]
+
+  @@index([tenantId])
+}
+
+model PurchaseOrder {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplierId  String
+  supplier    Supplier @relation(fields: [supplierId], references: [id])
+  branchId    String
+  branch      Branch   @relation(fields: [branchId], references: [id])
+  orderNumber String?
+  status      String   @default("RECEIVED") // PENDING | RECEIVED | CANCELLED
+  subtotal    Decimal  @db.Decimal(10, 2)
+  taxAmount   Decimal  @db.Decimal(10, 2) @default(0)
+  total       Decimal  @db.Decimal(10, 2)
+  notes       String?
+  receivedAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  items PurchaseOrderItem[]
+
+  @@index([tenantId])
+  @@index([supplierId])
+}
+
+model PurchaseOrderItem {
+  id       String        @id @default(uuid())
+  orderId  String
+  order    PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemId   String
+  item     Item          @relation(fields: [itemId], references: [id])
+  quantity Int
+  cost     Decimal       @db.Decimal(10, 2)
+}
+
+model Employee {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  personId  String   @unique
+  person    Person   @relation(fields: [personId], references: [id])
+  branchId  String?
+  branch    Branch?  @relation(fields: [branchId], references: [id])
+  position  String   // Cargo: Vendedor, Almacenero, Contador, etc.
+  salary    Decimal? @db.Decimal(10, 2)
+  hireDate  DateTime
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  cashSessions CashSession[]
+
+  @@index([tenantId])
+}
+
+model CashSession {
+  id             String    @id @default(uuid())
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch    @relation(fields: [branchId], references: [id])
+  employeeId     String?
+  employee       Employee? @relation(fields: [employeeId], references: [id])
+  openedAt       DateTime  @default(now())
+  closedAt       DateTime?
+  openingAmount  Decimal   @db.Decimal(10, 2) @default(0)
+  closingAmount  Decimal?  @db.Decimal(10, 2)
+  expectedAmount Decimal?  @db.Decimal(10, 2)
+  difference     Decimal?  @db.Decimal(10, 2)
+  status         String    @default("OPEN") // OPEN | CLOSED
+  notes          String?
+
+  movements CashMovement[]
+  sales     Sale[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+model CashMovement {
+  id          String      @id @default(uuid())
+  tenantId    String
+  sessionId   String
+  session     CashSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  type        String      // IN | OUT
+  amount      Decimal     @db.Decimal(10, 2)
+  concept     String
+  createdAt   DateTime    @default(now())
+
+  @@index([sessionId])
+}
+
+model TaxRate {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String   // Ej: IVA, ISR
+  rate        Decimal  @db.Decimal(5, 2) // Ej: 15.00
+  isInclusive Boolean  @default(true)
+  isActive    Boolean  @default(true)
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId])
+}
