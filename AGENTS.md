@@ -42,6 +42,7 @@ Toda contribución de código debe respetar estrictamente el stack de tecnologí
 - **CERO LEAKS ENTRE TENANTS**: Toda consulta SQL, llamada a Prisma ORM o búsqueda en repositorio **DEBE incluir `tenantId` en la cláusula `where`**.
 - Ej: `prisma.person.findFirst({ where: { tenantId, id } })`.
 - Nunca expongas endpoints o use cases que reciban una entidad sin asociarla a su `tenantId`.
+- **Server-side only**: el `tenantId` se deriva SIEMPRE de la sesión autenticada (`requireTenantId`/`requireApiAuth` en `src/lib/session.ts`). El cliente NO debe enviar `tenantId` como query param ni en el body (anti-spoofing).
 
 ### 🔒 Rule #2: Prohibido usar `any` en TypeScript
 - Todo el código debe tener **tipado estricto**.

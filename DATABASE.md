@@ -19,6 +19,7 @@
 - La carpeta `prisma/migrations/` es **documentación** de los cambios aplicados manualmente:
   - `20260909120000_init` — schema inicial.
   - `20260910070000_invoice_correlative` — `SaleCounter`, `invoiceNumber` NOT NULL + índice único.
+  - `20260910090000_auth_credentials` — `User.passwordHash` NOT NULL + `User.posPinHash`.
 - **`prisma migrate dev` falla en entornos no interactivos y puede ofrecer un reset destructivo.** No usarlo sin supervisión.
 
 ### Cómo aplicar un cambio de schema
@@ -35,7 +36,7 @@
 | :--- | :--- |
 | `Tenant` | Cliente SaaS; `slug` único; `modules String[]` (feature flags verticales); `settings JSONB` |
 | `Branch` | Sucursal física por Tenant |
-| `User` | Usuarios con roles (`SUPER_ADMIN`, `TENANT_ADMIN`, `STAFF`, `CUSTOMER`) |
+| `User` | Usuarios con roles; `@@unique([tenantId, email])`; `passwordHash` (bcrypt), `posPinHash` opcional |
 | `Person` | Polimórfica (cliente/empleado): `metadata JSONB`, `documentId` |
 | `Item` | Polimórfica (producto/servicio): `attributes JSONB`, `cost`/`price` |
 | `Inventory` | Stock por `Item` y `Branch`; `minAlert` |
@@ -70,6 +71,10 @@
 - **DESTRUCTIVO**: borra todos los registros de las tablas y recrea el demo.
 - Crea tenant `slug = distribuidora-sanjose` (el `id` es `uuid()` aleatorio por corrida; resolver siempre por `slug`), sucursal **Sucursal Central Managua**, 10 ítems con inventario, 3 proveedores, 3 órdenes de compra, empleados, clientes, 3 tasas IVA (default 15%), caja abierta con movimientos y 16 ventas de los últimos 7 días (números `FAC-1000...` correlativos).
 - Corre contra `DIRECT_URL`.
+- **Usuarios demo** (credenciales hasheadas con `bcryptjs`, nunca en claro):
+  - `admin@distribuidora-sanjose.com` / `Admin123!` — rol `TENANT_ADMIN`.
+  - `cajero@distribuidora-sanjose.com` + PIN POS `1234` — rol `STAFF`.
+- El script usa `node --env-file=.env` para cargar `DIRECT_URL` y `AUTH_SECRET`.
 
 ## 7. DATOS Y CONCURRENCIA
 

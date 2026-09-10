@@ -9,7 +9,7 @@ import { apiGet, apiSend } from '../api';
 const fmt = (n: number) => `C$ ${n.toLocaleString('es-NI', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtTime = (v?: Date | string | null) => (v ? new Date(v).toLocaleTimeString() : '');
 
-export function CashRegisterView({ tenantId = 'distribuidora-demo' }: { tenantId?: string }) {
+export function CashRegisterView() {
   const queryClient = useQueryClient();
   const [showOpenForm, setShowOpenForm] = useState(false);
   const [showMovForm, setShowMovForm] = useState(false);
@@ -21,32 +21,31 @@ export function CashRegisterView({ tenantId = 'distribuidora-demo' }: { tenantId
   const [closed, setClosed] = useState<CashSessionEntity | null>(null);
 
   const { data: session, isPending } = useQuery<CashSessionEntity | null>({
-    queryKey: ['cash-session', tenantId],
-    queryFn: () => apiGet<CashSessionEntity | null>(`/cash?tenantId=${tenantId}`),
-    enabled: !!tenantId,
+    queryKey: ['cash-session'],
+    queryFn: () => apiGet<CashSessionEntity | null>(`/cash`),
   });
 
   const openMutation = useMutation({
     mutationFn: (openingAmount: number) =>
-      apiSend<CashSessionEntity>(`/cash?tenantId=${tenantId}`, 'POST', { openingAmount }),
+      apiSend<CashSessionEntity>(`/cash`, 'POST', { openingAmount }),
     onSuccess: () => {
       setClosed(null);
-      queryClient.invalidateQueries({ queryKey: ['cash-session', tenantId] });
+      queryClient.invalidateQueries({ queryKey: ['cash-session'] });
     },
   });
 
   const movementMutation = useMutation({
     mutationFn: (payload: { sessionId: string; type: 'IN' | 'OUT'; amount: number; concept: string }) =>
-      apiSend<CashMovementEntity>(`/cash/movements?tenantId=${tenantId}`, 'POST', payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cash-session', tenantId] }),
+      apiSend<CashMovementEntity>(`/cash/movements`, 'POST', payload),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cash-session'] }),
   });
 
   const closeMutation = useMutation({
     mutationFn: (payload: { sessionId: string; closingAmount: number; expectedAmount: number; difference: number }) =>
-      apiSend<CashSessionEntity>(`/cash/close?tenantId=${tenantId}`, 'POST', payload),
+      apiSend<CashSessionEntity>(`/cash/close`, 'POST', payload),
     onSuccess: (data) => {
       setClosed(data);
-      queryClient.invalidateQueries({ queryKey: ['cash-session', tenantId] });
+      queryClient.invalidateQueries({ queryKey: ['cash-session'] });
     },
   });
 

@@ -8,7 +8,7 @@ import { apiGet, apiSend } from '../api';
 
 const fmtLps = (n: number) => `C$ ${n.toLocaleString('es-NI', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export default function SuppliersView({ tenantId = 'distribuidora-demo' }: { tenantId?: string }) {
+export default function SuppliersView() {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'suppliers' | 'orders'>('suppliers');
   const [searchTerm, setSearchTerm] = useState('');
@@ -24,21 +24,19 @@ export default function SuppliersView({ tenantId = 'distribuidora-demo' }: { ten
   });
 
   const { data: suppliers = [], isPending: loadingSuppliers } = useQuery<SupplierEntity[]>({
-    queryKey: ['suppliers', tenantId],
-    queryFn: () => apiGet<SupplierEntity[]>(`/suppliers?tenantId=${tenantId}`),
-    enabled: !!tenantId,
+    queryKey: ['suppliers'],
+    queryFn: () => apiGet<SupplierEntity[]>(`/suppliers`),
   });
 
   const { data: orders = [], isPending: loadingOrders } = useQuery<PurchaseOrderEntity[]>({
-    queryKey: ['purchase-orders', tenantId],
-    queryFn: () => apiGet<PurchaseOrderEntity[]>(`/purchase-orders?tenantId=${tenantId}`),
-    enabled: !!tenantId,
+    queryKey: ['purchase-orders'],
+    queryFn: () => apiGet<PurchaseOrderEntity[]>(`/purchase-orders`),
   });
 
   const createSupplier = useMutation({
     mutationFn: (payload: Omit<SupplierEntity, 'id' | 'tenantId' | 'isActive' | 'createdAt'>) =>
-      apiSend<SupplierEntity>(`/suppliers?tenantId=${tenantId}`, 'POST', payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['suppliers', tenantId] }),
+      apiSend<SupplierEntity>(`/suppliers`, 'POST', payload),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['suppliers'] }),
   });
 
   const filteredSuppliers = suppliers.filter(

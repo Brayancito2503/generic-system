@@ -32,14 +32,13 @@ const fmtDateTime = (iso: string) =>
     minute: '2-digit',
   });
 
-export function SalesHistoryView({ tenantId = 'distribuidora-demo' }: { tenantId?: string }) {
+export function SalesHistoryView() {
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const { data: sales = [], isPending } = useQuery<SaleEntity[]>({
-    queryKey: ['sales-history', tenantId],
-    queryFn: () => apiGet<SaleEntity[]>(`/sales?tenantId=${tenantId}&limit=200`),
-    enabled: !!tenantId,
+    queryKey: ['sales-history'],
+    queryFn: () => apiGet<SaleEntity[]>(`/sales?limit=200`),
   });
 
   const filtered = sales.filter(

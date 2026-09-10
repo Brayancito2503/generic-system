@@ -31,11 +31,7 @@ export type DistributionTab =
     | "employees"
     | "tax";
 
-export default function DistributionModuleApp({
-    tenantId,
-}: {
-    tenantId: string;
-}) {
+export default function DistributionModuleApp() {
     const [activeTab, setActiveTab] = useState<DistributionTab>("dashboard");
 
     const navItems = [
@@ -97,14 +93,14 @@ export default function DistributionModuleApp({
             </header>
             {/* Main Content Area */}
             <main className="flex-1 overflow-y-auto">
-                {activeTab === "dashboard" && <DistributionDashboard tenantId={tenantId} />}
-                {activeTab === "inventory" && <InventoryView tenantId={tenantId} />}
-                {activeTab === "sales" && <SalesPOSView tenantId={tenantId} />}
-                {activeTab === "history" && <SalesHistoryView tenantId={tenantId} />}
-                {activeTab === "cash" && <CashRegisterView tenantId={tenantId} />}
-                {activeTab === "suppliers" && <SuppliersView tenantId={tenantId} />}
-                {activeTab === "employees" && <EmployeesView tenantId={tenantId} />}
-                {activeTab === "tax" && <TaxAndInvoicingView tenantId={tenantId} />}
+                {activeTab === "dashboard" && <DistributionDashboard />}
+                {activeTab === "inventory" && <InventoryView />}
+                {activeTab === "sales" && <SalesPOSView />}
+                {activeTab === "history" && <SalesHistoryView />}
+                {activeTab === "cash" && <CashRegisterView />}
+                {activeTab === "suppliers" && <SuppliersView />}
+                {activeTab === "employees" && <EmployeesView />}
+                {activeTab === "tax" && <TaxAndInvoicingView />}
             </main>
         </div>
     );

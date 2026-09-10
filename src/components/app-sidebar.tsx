@@ -24,11 +24,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const t = useTranslations('sidebar');
 
   const data = {
-    user: {
-      name: "Usuario Demo",
-      email: "admin@genericsystem.io",
-      avatar: "/avatars/shadcn.jpg",
-    },
     teams: [
       {
         name: "Distribuidora San José",
@@ -75,7 +70,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       </SidebarContent>
       {/* Footer del menú lateral */}
       <SidebarFooter>
-        <NavUser user={data.user} />
+        <NavUser />
       </SidebarFooter>
       {/* Rail del menú lateral */}
       <SidebarRail />

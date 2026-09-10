@@ -107,17 +107,12 @@ function MiniBarChart({ data }: { data: { date: string; total: number }[] }) {
     );
 }
 
-export function DistributionDashboard({
-    tenantId = "distribuidora-demo",
-}: {
-    tenantId?: string;
-}) {
+export function DistributionDashboard() {
     const [activeTab, setActiveTab] = useState<"hoy" | "semana" | "mes">("hoy");
 
     const { data: stats, isPending, isError } = useQuery<DistributionDashboardStats>({
-        queryKey: ["distribution-dashboard", tenantId],
-        queryFn: () => apiGet<DistributionDashboardStats>(`/dashboard?tenantId=${tenantId}`),
-        enabled: !!tenantId,
+        queryKey: ["distribution-dashboard"],
+        queryFn: () => apiGet<DistributionDashboardStats>(`/dashboard`),
     });
 
     if (isPending) {

@@ -1,74 +1,25 @@
 {
     "homePage": {
-        "button": "Ordenar ahora",
-        "description": "El mejor restaurante en la ciudad",
-        "title": "Bienvenido a nuestro restaurante"
-    },
-    "menuPage": {
-        "button": "Ordenar ahora",
-        "description": "Nuestro menu",
-        "title": "Menu"
-    },
-    "contactPage": {
-        "button": "Ordenar ahora",
-        "description": "Contacto",
-        "title": "Contacto"
+        "description": "Motor SaaS multi-tenant de marca blanca para gestionar tu negocio.",
+        "login": "Iniciar sesión",
+        "title": "Generic System"
     },
     "loginPage": {
-        "adminLogin": "Inicio de sesión",
-        "description": "Ingrese sus credenciales para acceder al terminal.",
+        "adminLogin": "Administrador",
+        "description": "Ingrese sus credenciales para acceder al sistema.",
         "posAccess": "Acceso POS",
         "title": "Bienvenido de nuevo"
     },
     "sidebar": {
-        "admin": "Admin",
-        "customers": "Clientes",
         "dashboard": "Dashboard General",
         "distribution": "Distribuidora",
         "gym": "Gimnasio (GYM)",
-        "history": "Historial",
-        "invoices": "Facturas",
-        "kitchen": "Cocina",
         "language": {
             "default": "Idioma",
             "en": "Inglés",
             "es": "Español"
         },
         "logOut": "Cerrar sesión",
-        "orders": "Pedidos",
-        "playground": "Playground",
-        "settings": "Configuración",
-        "theme": "Tema",
-        "starred": "Favoritos"
-    },
-    "kitchenPage": {
-        "title": "Pedidos en Cocina",
-        "liveBadge": "EN VIVO",
-        "subtitle": "Vista de alta prioridad • {count} Pedidos Activos",
-        "avgPrep": "Avg. Prep",
-        "tickets": "Tickets",
-        "filters": {
-            "all": "Todos",
-            "coldStation": "Estación Fría",
-            "grill": "Parrilla",
-            "desserts": "Postres"
-        },
-        "statuses": {
-            "pending": "PENDIENTE",
-            "new": "NUEVO",
-            "inProgress": "EN PROGRESO",
-            "ready": "LISTO"
-        },
-        "card": {
-            "waiter": "Mesero",
-            "time": "Tiempo",
-            "total": "Total",
-            "startOrder": "Iniciar Orden",
-            "readyToServe": "Listo para Servir",
-            "recover": "Recuperar"
-        },
-        "empty": {
-            "message": "Esperando nuevos pedidos..."
-        }
+        "theme": "Tema"
     }
 }

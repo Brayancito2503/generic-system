@@ -8,7 +8,7 @@ import { apiGet, apiSend } from '../api';
 
 const fmtLps = (n: number) => `C$ ${n.toLocaleString('es-NI', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export default function EmployeesView({ tenantId = 'distribuidora-demo' }: { tenantId?: string }) {
+export default function EmployeesView() {
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddEmployeeModal, setShowAddEmployeeModal] = useState(false);
@@ -25,9 +25,8 @@ export default function EmployeesView({ tenantId = 'distribuidora-demo' }: { ten
   });
 
   const { data: employees = [], isPending } = useQuery<EmployeeEntity[]>({
-    queryKey: ['employees', tenantId],
-    queryFn: () => apiGet<EmployeeEntity[]>(`/employees?tenantId=${tenantId}`),
-    enabled: !!tenantId,
+    queryKey: ['employees'],
+    queryFn: () => apiGet<EmployeeEntity[]>(`/employees`),
   });
 
   const createEmployee = useMutation({
@@ -40,8 +39,8 @@ export default function EmployeesView({ tenantId = 'distribuidora-demo' }: { ten
       department?: string | null;
       salary?: number;
       commissionRate?: number;
-    }) => apiSend<EmployeeEntity>(`/employees?tenantId=${tenantId}`, 'POST', payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['employees', tenantId] }),
+    }) => apiSend<EmployeeEntity>(`/employees`, 'POST', payload),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['employees'] }),
   });
 
   const filteredEmployees = employees.filter((e) => {

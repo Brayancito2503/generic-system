@@ -15,7 +15,7 @@ interface ProductFormData {
 
 const emptyForm: ProductFormData = { sku: '', name: '', description: '', cost: '', price: '', stock: '', minAlert: '5' };
 
-export function InventoryView({ tenantId = 'distribuidora-demo' }: { tenantId?: string }) {
+export function InventoryView() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [filterLowStock, setFilterLowStock] = useState(false);
@@ -24,21 +24,20 @@ export function InventoryView({ tenantId = 'distribuidora-demo' }: { tenantId?: 
   const [editId, setEditId] = useState<string | null>(null);
 
   const { data: items = [], isPending, isError } = useQuery<InventoryStockItem[]>({
-    queryKey: ['inventory', tenantId],
-    queryFn: () => apiGet<InventoryStockItem[]>(`/inventory?tenantId=${tenantId}`),
-    enabled: !!tenantId,
+    queryKey: ['inventory'],
+    queryFn: () => apiGet<InventoryStockItem[]>(`/inventory`),
   });
 
   const createMutation = useMutation({
     mutationFn: (payload: Omit<InventoryStockItem, 'id' | 'tenantId' | 'isLowStock'>) =>
-      apiSend<InventoryStockItem>(`/inventory?tenantId=${tenantId}`, 'POST', payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['inventory', tenantId] }),
+      apiSend<InventoryStockItem>(`/inventory`, 'POST', payload),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, payload }: { id: string; payload: Partial<InventoryStockItem> }) =>
-      apiSend<InventoryStockItem>(`/inventory/${id}?tenantId=${tenantId}`, 'PATCH', payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['inventory', tenantId] }),
+      apiSend<InventoryStockItem>(`/inventory/${id}`, 'PATCH', payload),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
   });
 
   const mutationError: Error | null = createMutation.error ?? updateMutation.error;

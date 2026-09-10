@@ -40,26 +40,20 @@ const emptyModal: TaxModalState = {
   isDefault: false,
 };
 
-export default function TaxAndInvoicingView({
-  tenantId = 'distribuidora-demo',
-}: {
-  tenantId?: string;
-}) {
+export default function TaxAndInvoicingView() {
   const queryClient = useQueryClient();
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<TaxModalState | null>(null);
 
   const { data: taxes = [], isPending } = useQuery<TaxRateEntity[]>({
-    queryKey: ['tax-rates', tenantId],
-    queryFn: () => apiGet<TaxRateEntity[]>(`/tax?tenantId=${tenantId}`),
-    enabled: !!tenantId,
+    queryKey: ['tax-rates'],
+    queryFn: () => apiGet<TaxRateEntity[]>(`/tax`),
   });
 
   const { data: summary, isPending: isSummaryPending } = useQuery<FiscalSummary>({
-    queryKey: ['tax-summary', tenantId],
-    queryFn: () => apiGet<FiscalSummary>(`/tax/summary?tenantId=${tenantId}`),
-    enabled: !!tenantId,
+    queryKey: ['tax-summary'],
+    queryFn: () => apiGet<FiscalSummary>(`/tax/summary`),
   });
 
   // CAI Settings (config fiscal local del tenant; persistencia próxima iteración)
@@ -74,20 +68,20 @@ export default function TaxAndInvoicingView({
   });
 
   const refreshTaxes = () => {
-    queryClient.invalidateQueries({ queryKey: ['tax-rates', tenantId] });
-    queryClient.invalidateQueries({ queryKey: ['tax-summary', tenantId] });
+    queryClient.invalidateQueries({ queryKey: ['tax-rates'] });
+    queryClient.invalidateQueries({ queryKey: ['tax-summary'] });
   };
 
   const saveTax = useMutation({
     mutationFn: async (v: { id?: string; name: string; rate: number; isInclusive: boolean; isDefault: boolean }) =>
       v.id
-        ? apiSend(`/tax/${v.id}?tenantId=${tenantId}`, 'PATCH', {
+        ? apiSend(`/tax/${v.id}`, 'PATCH', {
             name: v.name,
             rate: v.rate,
             isInclusive: v.isInclusive,
             isDefault: v.isDefault,
           })
-        : apiSend(`/tax?tenantId=${tenantId}`, 'POST', {
+        : apiSend(`/tax`, 'POST', {
             name: v.name,
             rate: v.rate,
             isInclusive: v.isInclusive,
@@ -105,7 +99,7 @@ export default function TaxAndInvoicingView({
   });
 
   const deleteTax = useMutation({
-    mutationFn: (id: string) => apiSend(`/tax/${id}?tenantId=${tenantId}`, 'DELETE'),
+    mutationFn: (id: string) => apiSend(`/tax/${id}`, 'DELETE'),
     onSuccess: () => {
       setError(null);
       refreshTaxes();
@@ -116,7 +110,7 @@ export default function TaxAndInvoicingView({
 
   const setDefault = useMutation({
     mutationFn: (id: string) =>
-      apiSend(`/tax/${id}?tenantId=${tenantId}`, 'PATCH', { isDefault: true }),
+      apiSend(`/tax/${id}`, 'PATCH', { isDefault: true }),
     onSuccess: () => {
       setError(null);
       refreshTaxes();

@@ -28,7 +28,7 @@ interface CartLine {
   quantity: number;
 }
 
-export function SalesPOSView({ tenantId = 'distribuidora-demo' }: { tenantId?: string }) {
+export function SalesPOSView() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState<CartLine[]>([]);
@@ -39,36 +39,33 @@ export function SalesPOSView({ tenantId = 'distribuidora-demo' }: { tenantId?: s
   const [success, setSuccess] = useState<SaleEntity | null>(null);
 
   const { data: items = [], isPending } = useQuery<InventoryStockItem[]>({
-    queryKey: ['inventory', tenantId],
-    queryFn: () => apiGet<InventoryStockItem[]>(`/inventory?tenantId=${tenantId}`),
-    enabled: !!tenantId,
+    queryKey: ['inventory'],
+    queryFn: () => apiGet<InventoryStockItem[]>(`/inventory`),
   });
 
   const { data: customers = [] } = useQuery<CustomerLight[]>({
-    queryKey: ['customers', tenantId, customerQuery],
-    queryFn: () => apiGet<CustomerLight[]>(`/customers?tenantId=${tenantId}&q=${encodeURIComponent(customerQuery)}`),
-    enabled: !!tenantId,
+    queryKey: ['customers', customerQuery],
+    queryFn: () => apiGet<CustomerLight[]>(`/customers?q=${encodeURIComponent(customerQuery)}`),
   });
 
   const { data: taxRates = [] } = useQuery<TaxRateEntity[]>({
-    queryKey: ['tax-rates', tenantId],
-    queryFn: () => apiGet<TaxRateEntity[]>(`/tax?tenantId=${tenantId}`),
-    enabled: !!tenantId,
+    queryKey: ['tax-rates'],
+    queryFn: () => apiGet<TaxRateEntity[]>(`/tax`),
   });
 
   const registerSale = useMutation({
     mutationFn: (payload: { lines: { itemId: string; quantity: number }[]; discount: number; personId: string | null; notes: string }) =>
-      apiSend<SaleEntity>(`/sales?tenantId=${tenantId}`, 'POST', payload),
+      apiSend<SaleEntity>(`/sales`, 'POST', payload),
     onSuccess: (data) => {
       setSuccess(data);
       setCart([]);
       setDiscountInput('');
       setNotes('');
-      queryClient.invalidateQueries({ queryKey: ['inventory', tenantId] });
-      queryClient.invalidateQueries({ queryKey: ['cash-session', tenantId] });
-      queryClient.invalidateQueries({ queryKey: ['distribution-dashboard', tenantId] });
-      queryClient.invalidateQueries({ queryKey: ['tax-summary', tenantId] });
-      queryClient.invalidateQueries({ queryKey: ['sales-history', tenantId] });
+      queryClient.invalidateQueries({ queryKey: ['inventory'] });
+      queryClient.invalidateQueries({ queryKey: ['cash-session'] });
+      queryClient.invalidateQueries({ queryKey: ['distribution-dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['tax-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['sales-history'] });
     },
   });
 

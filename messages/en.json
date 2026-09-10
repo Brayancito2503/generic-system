@@ -1,74 +1,25 @@
 {
     "homePage": {
-        "button": "Order now",
-        "description": "The best restaurant in town",
-        "title": "Welcome to our restaurant"
-    },
-    "menuPage": {
-        "button": "Order now",
-        "description": "Our menu",
-        "title": "Menu"
-    },
-    "contactPage": {
-        "button": "Order now",
-        "description": "Contact us",
-        "title": "Contact us"
+        "description": "White-label multi-tenant SaaS engine to run your business.",
+        "login": "Sign in",
+        "title": "Generic System"
     },
     "loginPage": {
-        "adminLogin": "Admin Login",
-        "description": "Enter your credentials to access the terminal.",
+        "adminLogin": "Administrator",
+        "description": "Enter your credentials to access the system.",
         "posAccess": "POS Access",
-        "title": "Welcome Back"
+        "title": "Welcome back"
     },
     "sidebar": {
-        "admin": "Admin",
-        "customers": "Customers",
-        "dashboard": "Main Dashboard",
+        "dashboard": "Dashboard",
         "distribution": "Distribution",
-        "gym": "Gym (GYM)",
-        "history": "History",
-        "invoices": "Invoices",
-        "kitchen": "Kitchen",
+        "gym": "Gymnasium (GYM)",
         "language": {
             "default": "Language",
             "en": "English",
             "es": "Spanish"
         },
         "logOut": "Log out",
-        "orders": "Orders",
-        "playground": "Playground",
-        "settings": "Settings",
-        "theme": "Theme",
-        "starred": "Starred"
-    },
-    "kitchenPage": {
-        "title": "Kitchen Orders",
-        "liveBadge": "LIVE",
-        "subtitle": "High priority view • {count} Active Orders",
-        "avgPrep": "Avg. Prep",
-        "tickets": "Tickets",
-        "filters": {
-            "all": "All",
-            "coldStation": "Cold Station",
-            "grill": "Grill",
-            "desserts": "Desserts"
-        },
-        "statuses": {
-            "pending": "PENDING",
-            "new": "NEW",
-            "inProgress": "IN PROGRESS",
-            "ready": "READY"
-        },
-        "card": {
-            "waiter": "Waiter",
-            "time": "Time",
-            "total": "Total",
-            "startOrder": "Start Order",
-            "readyToServe": "Ready to Serve",
-            "recover": "Recover"
-        },
-        "empty": {
-            "message": "Waiting for new orders..."
-        }
+        "theme": "Theme"
     }
 }

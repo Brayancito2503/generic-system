@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient({
   datasourceUrl: process.env.DIRECT_URL,
@@ -171,6 +172,35 @@ async function main() {
     orderBy: { hireDate: 'asc' },
   });
 
+  console.log('Creando usuarios de acceso demo...');
+  const adminPassword = await bcrypt.hash('Admin123!', 10);
+  const staffPassword = await bcrypt.hash('Cajero123!', 10);
+  const posPin = await bcrypt.hash('1234', 10);
+
+  const adminPerson = await prisma.person.findFirst({ where: { tenantId: tenant.id, email: 'elena.torres@distribuidora.com.ni' } });
+  const staffPerson = await prisma.person.findFirst({ where: { tenantId: tenant.id, email: 'kevin.mejia@distribuidora.com.ni' } });
+
+  await prisma.user.create({
+    data: {
+      tenantId: tenant.id,
+      email: 'admin@distribuidora-sanjose.com',
+      passwordHash: adminPassword,
+      role: 'TENANT_ADMIN',
+      personId: adminPerson?.id ?? null,
+    },
+  });
+
+  await prisma.user.create({
+    data: {
+      tenantId: tenant.id,
+      email: 'cajero@distribuidora-sanjose.com',
+      passwordHash: staffPassword,
+      posPinHash: posPin,
+      role: 'STAFF',
+      personId: staffPerson?.id ?? null,
+    },
+  });
+
   console.log('Creando clientes...');
   const customerRecords = [];
   for (const c of customers) {
@@ -288,6 +318,8 @@ async function main() {
   console.log(`  - Empleados: ${employees.length} | Clientes: ${customerRecords.length}`);
   console.log(`  - Tasas de impuesto: ${taxRates.length}`);
   console.log('  - Sesión de caja abierta + ventas de 7 días');
+  console.log('  - Usuarios demo: admin@distribuidora-sanjose.com / Admin123!');
+  console.log('  - Usuario POS: cajero@distribuidora-sanjose.com / PIN 1234');
 }
 
 main()

@@ -68,15 +68,16 @@ model Branch {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  email     String
-  password  String
-  role      Role     @default(STAFF)
-  personId  String?  @unique
-  person    Person?  @relation(fields: [personId], references: [id])
-  createdAt DateTime @default(now())
+  id           String   @id @default(uuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email        String
+  passwordHash String
+  posPinHash   String?
+  role         Role     @default(STAFF)
+  personId     String?  @unique
+  person       Person?  @relation(fields: [personId], references: [id])
+  createdAt    DateTime @default(now())
 
   @@unique([tenantId, email])
   @@index([tenantId])
