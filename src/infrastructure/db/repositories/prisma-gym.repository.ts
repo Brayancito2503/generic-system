@@ -1,7 +1,7 @@
 import { prisma } from '../prisma';
 import { IGymRepository } from '@/core/ports/gym-repository.port';
 import { PersonEntity } from '@/core/entities/person';
-import { GymMembershipEntity, GymAccessLogEntity } from '@/core/entities/gym';
+import { GymMembershipEntity, GymAccessLogEntity, MembershipStatus } from '@/core/entities/gym';
 
 export class PrismaGymRepository implements IGymRepository {
   async findPersonWithMembership(
@@ -43,7 +43,7 @@ export class PrismaGymRepository implements IGymRepository {
           planName: personDb.gymMembership.planName,
           startDate: personDb.gymMembership.startDate,
           endDate: personDb.gymMembership.endDate,
-          status: personDb.gymMembership.status as any,
+          status: personDb.gymMembership.status as MembershipStatus,
           createdAt: personDb.gymMembership.createdAt,
         }
       : null;
@@ -76,7 +76,7 @@ export class PrismaGymRepository implements IGymRepository {
       planName: created.planName,
       startDate: created.startDate,
       endDate: created.endDate,
-      status: created.status as any,
+      status: created.status as MembershipStatus,
       createdAt: created.createdAt,
     };
   }
@@ -120,7 +120,7 @@ export class PrismaGymRepository implements IGymRepository {
       },
     });
 
-    return logs.map((log: any) => ({
+    return logs.map((log: (typeof logs)[number]) => ({
       id: log.id,
       tenantId: log.tenantId,
       membershipId: log.membershipId,

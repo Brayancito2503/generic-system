@@ -10,8 +10,16 @@ import { OrderTableCard } from './OrderTableCard';
 import { OrderEntryView } from './OrderEntryView';
 import { Table as TableIcon, LogOut } from 'lucide-react';
 
+interface CurrentOrder {
+    customerCount: number;
+    startTime: string;
+    totalAmount: number;
+}
+
+type TableWithCurrentOrder = Table & { currentOrder?: CurrentOrder };
+
 // Datos de ejemplo iniciales
-const DEFAULT_TABLES: (Table & { currentOrder?: any })[] = [
+const DEFAULT_TABLES: TableWithCurrentOrder[] = [
     { tableId: 1, tableNumber: '01', capacity: 4, status: TableStatusEnum.Available },
     { tableId: 2, tableNumber: '02', capacity: 4, status: TableStatusEnum.Occupied, currentOrder: { customerCount: 2, startTime: '45 min', totalAmount: 0 } },
     { tableId: 3, tableNumber: '03', capacity: 2, status: TableStatusEnum.PendingPayment, currentOrder: { customerCount: 2, startTime: '1h', totalAmount: 45.00 } },
@@ -28,7 +36,7 @@ const DEFAULT_TABLES: (Table & { currentOrder?: any })[] = [
 ];
 
 export const OrderManagementView: React.FC = () => {
-    const [tables, setTables] = useState<(Table & { currentOrder?: any })[]>(DEFAULT_TABLES);
+    const [tables, setTables] = useState<TableWithCurrentOrder[]>(DEFAULT_TABLES);
     const [filter, setFilter] = useState<'ALL' | 'AVAILABLE' | 'OCCUPIED' | 'PENDING_PAYMENT'>('ALL');
     const [search, setSearch] = useState('');
     const [isLoaded, setIsLoaded] = useState(false);
@@ -36,17 +44,19 @@ export const OrderManagementView: React.FC = () => {
 
     // Cargar datos del localStorage al montar el componente
     useEffect(() => {
-        if (typeof window !== 'undefined') {
+        if (typeof window === 'undefined') return;
+        const timer = window.setTimeout(() => {
             const savedTables = localStorage.getItem('dashboard_tables');
             if (savedTables) {
                 try {
-                    setTables(JSON.parse(savedTables));
+                    setTables(JSON.parse(savedTables) as TableWithCurrentOrder[]);
                 } catch (error) {
                     console.error('Error parsing saved tables:', error);
                 }
             }
             setIsLoaded(true);
-        }
+        }, 0);
+        return () => window.clearTimeout(timer);
     }, []);
 
     // Guardar en localStorage cada vez que cambien las mesas

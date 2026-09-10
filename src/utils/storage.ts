@@ -1,6 +1,6 @@
 // Manejar tokens y preferencias. Es mejor tener un wrapper que maneje errores de serialización.
 export const storage = {
-    set: (key: string, value: any) => {
+    set: (key: string, value: unknown) => {
         if (typeof window === 'undefined') return;
         localStorage.setItem(key, JSON.stringify(value));
     },
