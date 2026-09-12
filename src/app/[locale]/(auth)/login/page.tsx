@@ -15,7 +15,7 @@ export default function LoginPage() {
     const t = useTranslations("loginPage");
 
     return (
-        <div className="relative flex min-h-screen w-full bg-background-light dark:bg-background-dark text-black dark:text-white overflow-hidden">
+        <div className="relative flex min-h-screen w-full bg-background text-foreground overflow-hidden">
             {/* LEFT BRAND */}
             <div className="hidden lg:flex relative w-1/2 flex-col justify-between p-12 overflow-hidden bg-zinc-900">
                 <div
@@ -64,6 +64,7 @@ export default function LoginPage() {
                     {/* TABS */}
                     <div className="flex p-1 bg-slate-200 dark:bg-[#1c1c2e] rounded-xl">
                         <button
+                            type="button"
                             onClick={() => setMode("admin")}
                             className={`flex-1 py-2.5 rounded-lg font-semibold transition-all duration-200
                                 ${mode === "admin"
@@ -74,6 +75,7 @@ export default function LoginPage() {
                             {t("adminLogin")}
                         </button>
                         <button
+                            type="button"
                             onClick={() => setMode("pos")}
                             className={`flex-1 py-2.5 rounded-lg font-semibold transition-all duration-200
                                  ${mode === "pos"

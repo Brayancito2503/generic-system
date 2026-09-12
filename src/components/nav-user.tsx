@@ -106,7 +106,7 @@ export function NavUser() {
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <ThemeToggle variant="menuItem" text={t("theme")} />
+              <ThemeToggle variant="menuItem" text={t("theme.title")} />
               <SelectLanguage />
             </DropdownMenuGroup>
             <DropdownMenuSeparator />

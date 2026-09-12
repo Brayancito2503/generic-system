@@ -2,39 +2,68 @@
 
 import { ArrowRightIcon, Delete, Loader2Icon } from "lucide-react";
 import { useRouter } from "@/i18n/navigation";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useTranslations } from "next-intl";
 import { login } from "@/features/auth/api";
 
 export function PosPinLogin() {
+    const t = useTranslations("loginPage");
     const [pin, setPin] = useState("");
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     const router = useRouter();
 
-    const addNumber = (n: string) => {
+    const addNumber = useCallback((n: string) => {
         setError(null);
-        if (pin.length < 4) setPin(pin + n);
-    };
+        setPin((prev) => (prev.length < 4 ? prev + n : prev));
+    }, []);
 
-    const removeNumber = () => {
-        setPin(pin.slice(0, -1));
-    };
+    const removeNumber = useCallback(() => {
+        setPin((prev) => prev.slice(0, -1));
+    }, []);
 
-    const submitPin = async () => {
-        if (pin.length < 4 || loading) return;
+    const submitPin = useCallback(async (pinValue?: string) => {
+        const pinToSubmit = pinValue ?? pin;
+        if (pinToSubmit.length < 4 || loading) return;
         setLoading(true);
         setError(null);
         try {
-            await login({ mode: "pos", pin });
+            await login({ mode: "pos", pin: pinToSubmit });
             router.push("/dashboard");
             router.refresh();
         } catch (err) {
-            setError(err instanceof Error ? err.message : "PIN incorrecto");
+            setError(err instanceof Error ? err.message : t("invalidPin"));
             setPin("");
         } finally {
             setLoading(false);
         }
-    };
+    }, [pin, loading, router, t]);
+
+    // Keyboard support (Physical keyboard & Numpad)
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (loading) return;
+
+            if (e.key >= "0" && e.key <= "9") {
+                setError(null);
+                setPin((prev) => {
+                    if (prev.length >= 4) return prev;
+                    const nextPin = prev + e.key;
+                    if (nextPin.length === 4) {
+                        submitPin(nextPin);
+                    }
+                    return nextPin;
+                });
+            } else if (e.key === "Backspace") {
+                removeNumber();
+            } else if (e.key === "Enter" && pin.length === 4) {
+                submitPin();
+            }
+        };
+
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [loading, pin, removeNumber, submitPin]);
 
     return (
         <div className="flex flex-col items-center gap-6 animate-in fade-in slide-in-from-bottom-2">
@@ -61,7 +90,16 @@ export function PosPinLogin() {
                         key={n}
                         type="button"
                         disabled={loading}
-                        onClick={() => addNumber(n.toString())}
+                        onClick={() => {
+                            const nStr = n.toString();
+                            if (pin.length === 3) {
+                                const nextPin = pin + nStr;
+                                setPin(nextPin);
+                                submitPin(nextPin);
+                            } else {
+                                addNumber(nStr);
+                            }
+                        }}
                         className="h-16 rounded-2xl bg-white dark:bg-[#1c1c2e] text-2xl font-bold text-black dark:text-white shadow-sm hover:bg-slate-50 dark:hover:bg-[#25253e] active:scale-95 transition-all disabled:opacity-60"
                     >
                         {n}
@@ -80,7 +118,15 @@ export function PosPinLogin() {
                 <button
                     type="button"
                     disabled={loading}
-                    onClick={() => addNumber("0")}
+                    onClick={() => {
+                        if (pin.length === 3) {
+                            const nextPin = pin + "0";
+                            setPin(nextPin);
+                            submitPin(nextPin);
+                        } else {
+                            addNumber("0");
+                        }
+                    }}
                     className="h-16 rounded-2xl bg-white dark:bg-[#1c1c2e] text-2xl font-bold text-black dark:text-white shadow-sm hover:bg-slate-50 dark:hover:bg-[#25253e] active:scale-95 transition-all disabled:opacity-60"
                 >
                     0
@@ -89,7 +135,7 @@ export function PosPinLogin() {
                 <button
                     type="button"
                     disabled={loading || pin.length < 4}
-                    onClick={submitPin}
+                    onClick={() => submitPin()}
                     className="h-16 rounded-2xl bg-primary text-white text-2xl font-bold shadow-lg shadow-primary/20 hover:bg-primary/90 active:scale-95 transition-all flex items-center justify-center disabled:opacity-60"
                 >
                     {loading ? <Loader2Icon className="size-6 animate-spin" /> : <ArrowRightIcon />}
