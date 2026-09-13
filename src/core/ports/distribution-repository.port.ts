@@ -39,6 +39,12 @@ export interface UpdateInventoryItemInput {
   price?: number;
   stock?: number;
   minAlert?: number;
+  /**
+   * Branch scope for stock writes. When provided, `stock`/`minAlert` apply ONLY
+   * to that branch's Inventory row (never `inventory[0]`); the branch must
+   * belong to the tenant (404) and must carry an inventory row (400).
+   */
+  branchId?: string;
 }
 
 export interface CreateSupplierInput {

@@ -287,7 +287,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       include: { inventory: true },
     });
     if (!existing) {
-      throw new Error('Producto no encontrado');
+      throw new ApiError(404, 'Producto no encontrado');
     }
 
     const itemData: {
@@ -307,24 +307,47 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       const skuConflict = await prisma.item.findFirst({
         where: { tenantId, sku: itemData.sku, NOT: { id: itemId } },
       });
-      if (skuConflict) throw new Error('El SKU ya existe');
+      if (skuConflict) throw new ApiError(409, 'El SKU ya existe');
+    }
+
+    // Stock writes are branch-scoped: they touch ONLY the targeted branch's
+    // Inventory row. Item-level fields (sku/name/description/cost/price) are
+    // branch-independent and update without a branchId.
+    let inv: { stock: number; minAlert: number } | null = existing.inventory[0] ?? null;
+    if (input.branchId !== undefined) {
+      const branch = await prisma.branch.findFirst({
+        where: { id: input.branchId, tenantId },
+      });
+      if (!branch) {
+        throw new ApiError(404, 'Sucursal no encontrada');
+      }
+      const target = await prisma.inventory.findFirst({
+        where: { tenantId, itemId, branchId: input.branchId },
+      });
+      if (!target) {
+        throw new ApiError(
+          400,
+          'No existe inventario de este producto en la sucursal indicada'
+        );
+      }
+      inv = await prisma.inventory.update({
+        where: { id: target.id },
+        data: {
+          stock: input.stock ?? target.stock,
+          minAlert: input.minAlert ?? target.minAlert,
+        },
+      });
+    } else if (input.stock !== undefined || input.minAlert !== undefined) {
+      // The route rejects this before it reaches the repo; the double guard
+      // makes it impossible for a stock write without a branch to silently
+      // mutate inventory[0] (the legacy cross-branch bug this replaces).
+      throw new ApiError(400, 'Debe indicar la sucursal para actualizar el stock');
     }
 
     const item = await prisma.item.update({
       where: { id: itemId },
       data: itemData,
     });
-
-    let inv = existing.inventory[0];
-    if (inv) {
-      inv = await prisma.inventory.update({
-        where: { id: inv.id },
-        data: {
-          stock: input.stock ?? inv.stock,
-          minAlert: input.minAlert ?? inv.minAlert,
-        },
-      });
-    }
 
     const stock = inv?.stock ?? input.stock ?? 0;
     const minAlert = inv?.minAlert ?? input.minAlert ?? 0;

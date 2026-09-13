@@ -22,7 +22,17 @@ export async function PATCH(
     const parsed = updateInventoryItemSchema.safeParse(body);
     if (!parsed.success) throw new ApiError(400, 'Datos inválidos');
 
-    // branchId-scoped writes land in P1 (multi-branch updateInventoryItem fix).
+    // Negative-value guard: cost/price/stock/minAlert are `nonnegative` in the
+    // schema, so negative values fail safeParse → 400 before touching the DB.
+    // Stock writes are branch-scoped: a stock/minAlert update requires the
+    // branchId (mismatched branch → 404/400 repo-side; never cross-branch).
+    if (
+      (parsed.data.stock !== undefined || parsed.data.minAlert !== undefined) &&
+      parsed.data.branchId === undefined
+    ) {
+      throw new ApiError(400, 'Debe indicar la sucursal para actualizar el stock');
+    }
+
     const updated = await repository.updateInventoryItem(tenantId, id, {
       ...(parsed.data.sku !== undefined ? { sku: parsed.data.sku } : {}),
       ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
@@ -33,6 +43,7 @@ export async function PATCH(
       ...(parsed.data.price !== undefined ? { price: parsed.data.price } : {}),
       ...(parsed.data.stock !== undefined ? { stock: parsed.data.stock } : {}),
       ...(parsed.data.minAlert !== undefined ? { minAlert: parsed.data.minAlert } : {}),
+      ...(parsed.data.branchId !== undefined ? { branchId: parsed.data.branchId } : {}),
     });
 
     return NextResponse.json(updated);
