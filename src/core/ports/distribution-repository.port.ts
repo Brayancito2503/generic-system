@@ -14,6 +14,7 @@ import type {
   PaymentMethod,
   PurchaseOrderEntity,
   SaleEntity,
+  SaleReturnEntity,
   SupplierEntity,
   TaxRateEntity,
 } from '@/core/entities/distribution';
@@ -183,6 +184,18 @@ export interface RegisterSaleInput {
   paidAmount?: number;
 }
 
+// ─── P1 contracts: returns / receivables ─────────────────────────────────────
+
+export interface SaleReturnLineInput {
+  itemId: string;
+  quantity: number;
+}
+
+export interface CreateSaleReturnInput {
+  items: SaleReturnLineInput[];
+  reason?: string | null;
+}
+
 export interface IDistributionRepository {
   getDashboard(tenantId: string): Promise<DistributionDashboardStats>;
   getInventory(tenantId: string): Promise<InventoryStockItem[]>;
@@ -275,4 +288,15 @@ export interface IDistributionRepository {
     page?: number,
     limit?: number
   ): Promise<PaginatedResult<SaleEntity>>;
+  /**
+   * Audited return/void for a sale: rejects over-return (refunded qty > sold
+   * qty, cumulative across prior returns) with 409, restores stock in the
+   * sale-branch inventory, adjusts the open receivable balance when the sale
+   * had credit (refund > remaining balance → 409), all in one transaction.
+   */
+  createSaleReturn(
+    tenantId: string,
+    saleId: string,
+    input: CreateSaleReturnInput
+  ): Promise<SaleReturnEntity>;
 }

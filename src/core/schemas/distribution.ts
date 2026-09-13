@@ -163,6 +163,22 @@ export const salesListQuerySchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Returns (P1): audited refunds/voids that restore stock. The repo rejects an
+// over-return (refunded qty > sold qty) with 409 and adjusts the receivable
+// balance of the original credit sale; all money math is server-side.
+// ---------------------------------------------------------------------------
+
+export const saleReturnItemSchema = z.object({
+  itemId: idString,
+  quantity: z.number().int().positive(),
+});
+
+export const createSaleReturnSchema = z.object({
+  items: z.array(saleReturnItemSchema).min(1),
+  reason: nullableText,
+});
+
+// ---------------------------------------------------------------------------
 // Cash register
 // ---------------------------------------------------------------------------
 

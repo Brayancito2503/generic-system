@@ -21,6 +21,7 @@ import type {
   UpdateTaxRateInput,
   ReceivePurchaseOrderInput,
   RegisterSaleInput,
+  CreateSaleReturnInput,
 } from '@/core/ports/distribution-repository.port';
 import type {
   CashMovementEntity,
@@ -36,6 +37,7 @@ import type {
   PurchaseOrderEntity,
   RecentSale,
   SaleEntity,
+  SaleReturnEntity,
   SupplierEntity,
   TaxRateEntity,
 } from '@/core/entities/distribution';
@@ -1681,5 +1683,170 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       limit,
       hasMore: page * limit < total,
     };
+  }
+
+  // ─── P1: Sales returns (audited refunds / voids) ───────────────────────────
+  async createSaleReturn(
+    tenantId: string,
+    saleId: string,
+    input: CreateSaleReturnInput
+  ): Promise<SaleReturnEntity> {
+    // Merge duplicate item lines into single quantities (same pattern as registerSale).
+    const merged = new Map<string, number>();
+    for (const line of input.items) {
+      if (line.quantity <= 0 || !Number.isInteger(line.quantity)) {
+        throw new ApiError(400, 'Cantidad inválida en la devolución');
+      }
+      merged.set(line.itemId, (merged.get(line.itemId) ?? 0) + line.quantity);
+    }
+    const lines = [...merged.entries()].map(([itemId, quantity]) => ({
+      itemId,
+      quantity,
+    }));
+
+    return await prisma.$transaction(async (tx) => {
+      const sale = await tx.sale.findFirst({
+        where: { tenantId, id: saleId },
+        include: {
+          items: { include: { item: true } },
+          cashSession: { select: { branchId: true } },
+        },
+      });
+      if (!sale) {
+        throw new ApiError(404, 'Venta no encontrada');
+      }
+
+      // Every returned item must belong to the original sale.
+      for (const line of lines) {
+        if (!sale.items.some((si) => si.itemId === line.itemId)) {
+          throw new ApiError(
+            400,
+            `El producto "${line.itemId}" no pertenece a la venta`
+          );
+        }
+      }
+
+      // Over-return guard: cumulative across prior returns for this sale →
+      // 409 when the refunded qty would exceed the sold qty; stock unchanged
+      // because the whole transaction rolls back.
+      const priorReturns = await tx.saleReturnItem.findMany({
+        where: { return: { tenantId, saleId } },
+        select: { itemId: true, quantity: true },
+      });
+      const priorQtyByItem = new Map<string, number>();
+      for (const pr of priorReturns) {
+        priorQtyByItem.set(
+          pr.itemId,
+          (priorQtyByItem.get(pr.itemId) ?? 0) + pr.quantity
+        );
+      }
+
+      for (const line of lines) {
+        const saleItem = sale.items.find((si) => si.itemId === line.itemId)!;
+        const prior = priorQtyByItem.get(line.itemId) ?? 0;
+        if (prior + line.quantity > saleItem.quantity) {
+          throw new ApiError(
+            409,
+            `La cantidad a devolver supera la cantidad vendida de "${saleItem.item.name}"`
+          );
+        }
+      }
+
+      // Refund = sale-time price × qty (two-decimal rounding only on the total).
+      let totalRefund = 0;
+      for (const line of lines) {
+        const saleItem = sale.items.find((si) => si.itemId === line.itemId)!;
+        totalRefund += saleItem.price.toNumber() * line.quantity;
+      }
+      totalRefund = Math.round(totalRefund * 100) / 100;
+
+      // Stock restore: goods go back to the branch where they were sold.
+      const branchId = sale.cashSession?.branchId ?? null;
+      if (branchId) {
+        for (const line of lines) {
+          const result = await tx.inventory.updateMany({
+            where: { tenantId, branchId, itemId: line.itemId },
+            data: { stock: { increment: line.quantity } },
+          });
+          if (result.count === 0) {
+            const saleItem = sale.items.find((si) => si.itemId === line.itemId)!;
+            throw new ApiError(
+              400,
+              `No existe inventario para "${saleItem.item.name}" en la sucursal de la venta`
+            );
+          }
+        }
+      }
+
+      // Receivable adjustment: a refund on a credit sale reduces the
+      // outstanding balance; refund beyond the remaining balance is an
+      // overpay edge → 409 (the operator handles mixed cash/debt refunds
+      // manually; the balance can never go negative).
+      if (sale.balance.toNumber() > 0) {
+        const receivable = await tx.receivable.findFirst({
+          where: { tenantId, saleId },
+        });
+        if (receivable && receivable.balance.toNumber() > 0) {
+          if (totalRefund > receivable.balance.toNumber()) {
+            throw new ApiError(
+              409,
+              'La devolución supera el saldo pendiente de la cuenta por cobrar'
+            );
+          }
+          const newBalance =
+            Math.round((receivable.balance.toNumber() - totalRefund) * 100) / 100;
+          await tx.receivable.update({
+            where: { id: receivable.id },
+            data: {
+              balance: newBalance,
+              status: newBalance <= 0 ? 'PAID' : 'PARTIAL',
+            },
+          });
+        }
+      }
+
+      // Persist the audited return + line items (audit trail for the sale).
+      const saleReturn = await tx.saleReturn.create({
+        data: {
+          tenantId,
+          saleId: sale.id,
+          cashSessionId: sale.cashSessionId,
+          reason: input.reason ?? null,
+          totalRefund,
+          items: {
+            create: lines.map((l) => {
+              const saleItem = sale.items.find((si) => si.itemId === l.itemId)!;
+              return {
+                itemId: l.itemId,
+                quantity: l.quantity,
+                refundAmount: saleItem.price.toNumber() * l.quantity,
+              };
+            }),
+          },
+        },
+        include: {
+          items: { include: { item: { select: { name: true } } } },
+        },
+      });
+
+      return {
+        id: saleReturn.id,
+        tenantId: saleReturn.tenantId,
+        saleId: saleReturn.saleId,
+        saleNumber: sale.invoiceNumber,
+        cashSessionId: saleReturn.cashSessionId,
+        reason: saleReturn.reason,
+        totalRefund: saleReturn.totalRefund.toNumber(),
+        createdAt: saleReturn.createdAt,
+        items: saleReturn.items.map((si) => ({
+          id: si.id,
+          returnId: si.returnId,
+          itemId: si.itemId,
+          itemName: si.item.name,
+          quantity: si.quantity,
+          refundAmount: si.refundAmount.toNumber(),
+        })),
+      };
+    });
   }
 }
