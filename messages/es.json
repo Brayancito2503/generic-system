@@ -462,6 +462,31 @@
             "cancel": "Cancelar",
             "saving": "Guardando...",
             "save": "Guardar"
+        },
+        "settings": {
+            "title": "Configuración del Tenant",
+            "subtitle": "Identidad, marca y configuración regional del tenant",
+            "industryLabel": "Industria",
+            "loading": "Cargando configuración...",
+            "loadError": "Error al cargar la configuración.",
+            "retry": "Reintentar",
+            "fieldName": "Nombre del Tenant",
+            "namePlaceholder": "Ej: Distribuidora San José",
+            "fieldLogoUrl": "URL del Logo",
+            "logoPlaceholder": "https://ejemplo.com/logo.png",
+            "fieldPrimaryColor": "Color Primario",
+            "colorPlaceholder": "#0f172a",
+            "colorHint": "Formato hexadecimal (#RRGGBB o #RRGGBBAA)",
+            "fieldCurrency": "Moneda",
+            "currencyPlaceholder": "NIO",
+            "fieldTimezone": "Zona Horaria",
+            "timezonePlaceholder": "America/Managua",
+            "fiscalHint": "Los datos fiscales (RUC, CAI y rangos de comprobantes) se administran en la configuración fiscal del módulo de Distribución.",
+            "save": "Guardar Cambios",
+            "saving": "Guardando...",
+            "saved": "Configuración guardada exitosamente.",
+            "saveError": "Error al guardar la configuración.",
+            "invalidName": "El nombre del tenant no puede estar vacío."
         }
     }
 }

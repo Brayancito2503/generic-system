@@ -462,6 +462,31 @@
             "cancel": "Cancel",
             "saving": "Saving...",
             "save": "Save"
+        },
+        "settings": {
+            "title": "Tenant Settings",
+            "subtitle": "Tenant identity, branding and regional configuration",
+            "industryLabel": "Industry",
+            "loading": "Loading settings...",
+            "loadError": "Error loading the settings.",
+            "retry": "Retry",
+            "fieldName": "Tenant Name",
+            "namePlaceholder": "e.g. San José Distributor",
+            "fieldLogoUrl": "Logo URL",
+            "logoPlaceholder": "https://example.com/logo.png",
+            "fieldPrimaryColor": "Primary Color",
+            "colorPlaceholder": "#0f172a",
+            "colorHint": "Hex format (#RRGGBB or #RRGGBBAA)",
+            "fieldCurrency": "Currency",
+            "currencyPlaceholder": "NIO",
+            "fieldTimezone": "Timezone",
+            "timezonePlaceholder": "America/Managua",
+            "fiscalHint": "Fiscal data (Tax ID, CAI and invoice ranges) is managed in the fiscal configuration of the Distribution module.",
+            "save": "Save Changes",
+            "saving": "Saving...",
+            "saved": "Settings saved successfully.",
+            "saveError": "Error saving the settings.",
+            "invalidName": "The tenant name cannot be empty."
         }
     }
 }
