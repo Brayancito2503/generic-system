@@ -222,6 +222,19 @@
         "history": {
             "title": "Historial de Ventas",
             "subtitle": "Registro de comprobantes y facturas emitidas",
+            "searchPlaceholder": "Buscar por factura o cliente...",
+            "emptySales": "Aún no hay ventas registradas. Crea una desde la pestaña Ventas (POS).",
+            "emptyPage": "No hay más ventas registradas.",
+            "noSearchResults": "Sin resultados para tu búsqueda.",
+            "loadError": "Error al cargar el historial de ventas.",
+            "items": "{count} ítems",
+            "vatIncluded": "IVA incluido",
+            "discount": "Descuento",
+            "products": "Productos",
+            "note": "Nota",
+            "colPayment": "Método de Pago",
+            "colBalance": "Saldo",
+            "paidInFull": "Pagado",
             "invoiceNumber": "N° Factura",
             "customer": "Cliente",
             "itemsCount": "Cant. Ítems",
@@ -230,6 +243,12 @@
             "actions": "Acciones",
             "viewDetails": "Ver Detalle",
             "completed": "Completada"
+        },
+        "paginator": {
+            "previous": "Anterior",
+            "next": "Siguiente",
+            "info": "Mostrando {from}–{to}",
+            "hasMore": "Hay más resultados. Usa Siguiente para continuar."
         },
         "cash": {
             "title": "Control de Caja & Movimientos",

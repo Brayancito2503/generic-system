@@ -222,6 +222,19 @@
         "history": {
             "title": "Sales History",
             "subtitle": "Log of issued receipts and invoices",
+            "searchPlaceholder": "Search by invoice or customer...",
+            "emptySales": "No sales registered yet. Create one from the Sales (POS) tab.",
+            "emptyPage": "No more sales registered.",
+            "noSearchResults": "No results for your search.",
+            "loadError": "Error loading the sales history.",
+            "items": "{count} items",
+            "vatIncluded": "VAT included",
+            "discount": "Discount",
+            "products": "Products",
+            "note": "Note",
+            "colPayment": "Payment Method",
+            "colBalance": "Balance",
+            "paidInFull": "Paid in full",
             "invoiceNumber": "Invoice #",
             "customer": "Customer",
             "itemsCount": "Item Count",
@@ -230,6 +243,12 @@
             "actions": "Actions",
             "viewDetails": "View Details",
             "completed": "Completed"
+        },
+        "paginator": {
+            "previous": "Previous",
+            "next": "Next",
+            "info": "Showing {from}–{to}",
+            "hasMore": "There are more results. Use Next to continue."
         },
         "cash": {
             "title": "Cash Control & Movements",
