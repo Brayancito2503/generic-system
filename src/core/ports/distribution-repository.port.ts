@@ -50,6 +50,21 @@ export interface CreateSupplierInput {
   address?: string | null;
 }
 
+/**
+ * PATCH semantics: undefined fields are left untouched; null clears nullable
+ * contact fields. `isActive: false` deactivates the supplier (excluded from
+ * new PO selection server-side) while existing purchase orders stay intact.
+ */
+export interface UpdateSupplierInput {
+  name?: string;
+  contactName?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  taxId?: string | null;
+  address?: string | null;
+  isActive?: boolean;
+}
+
 export interface CreateEmployeeInput {
   firstName: string;
   lastName: string;
@@ -217,6 +232,16 @@ export interface IDistributionRepository {
   ): Promise<InventoryStockItem>;
   getSuppliers(tenantId: string): Promise<SupplierEntity[]>;
   createSupplier(tenantId: string, input: CreateSupplierInput): Promise<SupplierEntity>;
+  /**
+   * PATCH semantics: undefined fields untouched, null clears nullable contact
+   * fields, `isActive: false` deactivates (existing POs remain intact — PO
+   * create already rejects inactive suppliers). 404 cross-tenant.
+   */
+  updateSupplier(
+    tenantId: string,
+    supplierId: string,
+    input: UpdateSupplierInput
+  ): Promise<SupplierEntity>;
   getPurchaseOrders(tenantId: string): Promise<PurchaseOrderEntity[]>;
   createPurchaseOrder(
     tenantId: string,

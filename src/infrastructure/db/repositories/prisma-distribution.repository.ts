@@ -8,6 +8,7 @@ import type {
   CreateInventoryItemInput,
   UpdateInventoryItemInput,
   CreateSupplierInput,
+  UpdateSupplierInput,
   CreateEmployeeInput,
   CreateCustomerInput,
   UpdateCustomerInput,
@@ -391,6 +392,48 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       address: created.address,
       isActive: created.isActive,
       createdAt: created.createdAt,
+    };
+  }
+
+  async updateSupplier(
+    tenantId: string,
+    supplierId: string,
+    input: UpdateSupplierInput
+  ): Promise<SupplierEntity> {
+    const existing = await prisma.supplier.findFirst({
+      where: { tenantId, id: supplierId },
+    });
+    if (!existing) {
+      throw new ApiError(404, 'Proveedor no encontrado');
+    }
+
+    const data: Prisma.SupplierUpdateInput = {};
+    if (input.name !== undefined) data.name = input.name;
+    if (input.contactName !== undefined) data.contactName = input.contactName;
+    if (input.phone !== undefined) data.phone = input.phone;
+    if (input.email !== undefined) data.email = input.email;
+    if (input.taxId !== undefined) data.taxId = input.taxId;
+    if (input.address !== undefined) data.address = input.address;
+    if (input.isActive !== undefined) data.isActive = input.isActive;
+
+    // Deactivation never touches existing POs (no cascade, no status change):
+    // createPurchaseOrder already rejects inactive suppliers server-side.
+    const updated = await prisma.supplier.update({
+      where: { id: supplierId },
+      data,
+    });
+
+    return {
+      id: updated.id,
+      tenantId: updated.tenantId,
+      name: updated.name,
+      contactName: updated.contactName,
+      phone: updated.phone,
+      email: updated.email,
+      taxId: updated.taxId,
+      address: updated.address,
+      isActive: updated.isActive,
+      createdAt: updated.createdAt,
     };
   }
 

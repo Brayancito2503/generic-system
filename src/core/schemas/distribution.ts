@@ -105,8 +105,22 @@ export const createSupplierSchema = z.object({
   address: nullableText,
 });
 
-export const updateSupplierSchema = createSupplierSchema
-  .partial()
+/**
+ * Edición + desactivación de proveedores. A diferencia del create, `isActive`
+ * es PATCHeable: `isActive: false` desactiva sin tocar las órdenes de compra
+ * existentes (el create de PO ya rechaza proveedores inactivos en el servidor).
+ * `null` limpia los campos de contacto nullable; `undefined` los deja intactos.
+ */
+export const updateSupplierSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    contactName: nullableText,
+    phone: nullableText,
+    email: nullableEmail,
+    taxId: nullableText,
+    address: nullableText,
+    isActive: z.boolean().optional(),
+  })
   .refine(hasAnyDefinedField, { message: 'No hay campos válidos para actualizar' });
 
 // ---------------------------------------------------------------------------
