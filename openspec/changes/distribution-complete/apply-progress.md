@@ -1,9 +1,10 @@
-# Apply Progress: distribution-complete — S1 F0 (PR #1) + S2 Security Foundation (PR #2) + S3a P0 data layer (PR #3)
+# Apply Progress: distribution-complete — S1 F0 (PR #1) + S2 Security Foundation (PR #2) + S3a/S3b P0 data layer (PR #3)
 
 - **Change**: distribution-complete
 - **Batch 1**: Phase 1 S1 F0 Environment, tasks 1.1 + 1.2 (PR #1, branch `feat/distribution-complete-01-f0`)
 - **Batch 2**: Phase 2 S2 Security Foundation, tasks 2.1–2.7 (PR #2, branch `feat/distribution-complete-02-security`, base = PR #1 branch)
-- **Batch 3**: Phase 3 S3a (P0 data layer), tasks 3.1 + 3.2 (PR #3, branch `feat/distribution-complete-03-p0`, base = PR #2 branch) — this report
+- **Batch 3**: Phase 3 S3a (P0 data layer), tasks 3.1 + 3.2 (PR #3, branch `feat/distribution-complete-03-p0`, base = PR #2 branch)
+- **Batch 4**: Phase 3 S3b (P0 repo transaction logic + seed continuity), tasks 3.3 + 3.4 (PR #3, branch `feat/distribution-complete-03-p0`) — this report
 - **Mode**: Standard (no test runner configured; gate = lint / typecheck / build + grep guards + `prisma generate`)
 - **Chain**: feature-branch-chain — PR #1 base = tracker `feat/distribution-complete`; PR #2 base = PR #1 branch; PR #3 base = PR #2 branch; only tracker merges to main. Do NOT open PRs from apply.
 
@@ -20,6 +21,14 @@ Grep across `src/` (`requireApiAuth`, `roles`, role arrays, route handlers in `s
 | `requireTenantId` in routes | 14 distribution routes use it for tenant scoping only (401 on null); it never rejects by role |
 
 Consumer inventory (exhaustive): no route, middleware, or lib imports or calls `requireApiAuth([...])` today; there is no strict-role-list denial behavior anywhere in the codebase. Extending `requireApiAuth` so `SUPER_ADMIN` satisfies any roles list is purely additive (it only short-circuits the existing `roles.includes` check for SUPER_ADMIN; other roles behave identically) and cannot regress a consumer, because no consumer exists yet — 2.5–2.7 proceeded.
+
+## Work Unit Evidence — S3b P0 repo transaction logic + seed continuity (batch 4)
+
+| Evidence | Required value |
+|---|---|
+| Focused test command and exact result | `npx prisma generate` → exit 0 (no-op success, schema unchanged this batch); `npm run lint` → exit 0 (0 errors 0 warnings); `npm run typecheck` → exit 0 (`tsc --noEmit` clean — includes `prisma/seed.ts` via tsconfig `**/*.ts`); `npm run build` → exit 0 (Next.js 16.3.4 production build, 17/17 routes). Per-commit hooks re-ran lint + typecheck on each of the 4 code commits (all exit 0) |
+| Runtime harness command/scenario and exact result | N/A as runtime: no DB-backed smoke was authorized for S3b (DB is READ-ONLY this batch; `db:seed`/`migrate dev` NOT run). The DB-backed smoke (seed → `SaleCounter.lastNumber === 16` → first real sale `INV-…-000017`; dup-open → 409; over-receive → 409) is the S5 gate per design Testing Strategy, under user supervision with DB backup |
+| Rollback boundary | Revert the 4 code commits of batch 4 independently: `feat(distribution)` sale flow (repo file), `feat(distribution)` PO receive (repo + port), `feat(distribution)` cash open/close (repo file), `feat(db)` seed (`prisma/seed.ts`). All are self-contained per-behavior slices on top of S3a; seed revert leaves the historical FAC-* sales untouched |
 
 ## Work Unit Evidence — S3a P0 data layer (batch 3)
 
@@ -73,15 +82,19 @@ Role matrix (verified against `specs/distribution-access-control` + per-capabili
 | `tax/[id]/route.ts` PATCH+DELETE | TENANT_ADMIN | config mutation (STAFF→403) |
 | `tax/summary/route.ts` GET | TENANT_ADMIN | fiscal reporting on the tax/CAI admin surface; not consumed by any STAFF flow |
 
-### Phase 3 — S3 P0 (sale-blocking) (batch 3: S3a only)
+### Phase 3 — S3 P0 (sale-blocking) (batches 3+4: S3a + S3b)
 
 - [x] 3.1 `prisma/schema.prisma` M + `prisma/migrations/20260912120000_distribution_complete/migration.sql` C: additive DDL — Sale.paymentMethod/paidAmount/balance (nullable-agnostic: `NOT NULL DEFAULT` so existing rows survive), PurchaseOrderItem.receivedQty, InvoicingConfig (tenantId `@unique`, 1 per tenant), Receivable + ReceivablePayment, SaleReturn + SaleReturnItem; `@@unique([tenantId, invoiceNumber])` on Sale verified ALREADY present (migration 20260910070000_invoice_correlative), NOT re-applied; `npx prisma generate` → exit 0 [S3a]
 - [x] 3.2 `src/core/entities/distribution.ts` M: `PaymentMethod`/`ReceivableStatus` unions, SaleEntity.paymentMethod/paidAmount/balance, PurchaseOrderItemEntity.receivedQty, InvoicingConfigEntity, ReceivableEntity, ReceivablePaymentEntity, SaleReturnEntity, SaleReturnItemEntity, `PaginatedResult<T>` {items/page/limit/hasMore}; `src/core/ports/distribution-repository.port.ts` M: `CloseCashSessionInput {sessionId, physicalCount}` (expected/difference no longer client input), `RegisterSaleInput.paymentMethod/paidAmount`, input contracts CreateCustomer/UpdateCustomer/CreatePurchaseOrder/ReceivePurchaseOrder/UpdateEmployee/UpdateInvoicingConfig; NO `any` [S3a]
-- [ ] 3.3–3.7 pending (S3b–S3d: repo tx/close/409 + seed, routes, views) — next batch
+- [x] 3.3 `src/infrastructure/db/repositories/prisma-distribution.repository.ts` M: `registerSale` now runs the FULL server-side money in one `$transaction` — stock decrement (`updateMany` with `stock >= qty` guard → `ApiError(409, 'Stock insuficiente…')`), SaleCounter upsert+increment (`INV-YYYYMMDD-######`, next after seed 16 → first real sale `INV-…-000017`), Sale + items with PERSISTED `paymentMethod/paidAmount/balance`, and `Receivable` opened in the same tx when `balance > 0` (credit sales require a customer → `ApiError(400)`); all throws are now typed `ApiError` (400 malformed / 404 missing customer / 409 stock). `openCashSession` gains the single-open-session guard (`ApiError(409, 'Ya existe una sesión de caja abierta')`). `closeCashSession` computes server-side `expected = opening + Σmovements(IN−OUT) + Σsales − Σreturns` and `difference = physicalCount − expected` (client expected/difference never read; returns persist the derived values as `closingAmount/expectedAmount/difference`). NEW `receivePurchaseOrder` (port method shipped with impl): 404 cross-tenant, 409 over-receive (`quantity − receivedQty` guard), inventory increment + `receivedQty` update + ORDERED → RECEIVED when complete, all in one `$transaction` — greps: `$transaction` at repo lines 873/910/1072, SaleCounter upsert at 1119–1123, close derivation at 774–779 [S3b]
+- [x] 3.4 Open question — SaleCounter continuity: `prisma/seed.ts` M: upsert `SaleCounter { update: { lastNumber: 16 }, create: { lastNumber: 16 } }` AFTER the 16 `FAC-*` sales (seed lines 371–379; sales untouched at 352–369), items added to the 3 seeded POs (PO-001 fully received / PO-002 pending / PO-003 partially received → receive smoke can complete it), default `InvoicingConfig` row (upsert, seed lines 381–392), plus defensive `deleteMany` coverage for the new tables; verified against current schema by `tsc --noEmit`; seed NOT run (DB read-only this batch) [S3b]
+- [ ] 3.5 Routes: `src/app/api/distribution/tax/config/route.ts` C GET/PUT TENANT_ADMIN+Zod; `customers/route.ts` M POST; `customers/[id]/route.ts` C PATCH; `purchase-orders/route.ts` M POST; `purchase-orders/[id]/receive/route.ts` C POST (409 over-receive) [S3c]
+- [ ] 3.6 Open question — employee→User PIN link: `employees/[id]/route.ts` C PATCH/deactivate + User link (upsert User: personId = employee.personId, bcrypt(PIN) → posPinHash, role STAFF, same tx); `cash/route.ts` M open-409; `cash/close/route.ts` M physicalCount-only server close [S3c]
+- [ ] 3.7 Views: `TaxAndInvoicingView.tsx` M (server CAI, drop fake local state + hardcoded `000-001-01-00001249`), `CashRegisterView.tsx` M, `CustomersView.tsx` C, `EmployeesView.tsx` M, `SuppliersView.tsx` M (PO create/receive), `DistributionModuleApp.tsx` M (customers tab); i18n es+en [S3d]
 
 ### Pending (not part of this batch)
 
-- [ ] 3.3–3.7 Phase 3 S3b–S3d (repo tx + server-side close + seed; routes; views) [S3b–S3d]
+- [ ] 3.5–3.7 Phase 3 S3c–S3d (routes; views) [S3c–S3d]
 - [ ] 4.1–4.4 Phase 4 S4 P1 (100%) [S4a–S4d]
 - [ ] 5.1–5.5 Phase 5 S5 Base Shell + Admin [S5a/S5b]
 
@@ -109,6 +122,12 @@ Role matrix (verified against `specs/distribution-access-control` + per-capabili
 
 ## Deviations from Design
 
+### Batch 4 (S3b)
+
+1. **Credit-sale customer guard (content, spec-safe)**: `Receivable.personId` is `NOT NULL` in the S3a schema, so a `balance > 0` sale without a customer cannot open a receivable. The batch enforces `ApiError(400, 'Las ventas a crédito requieren un cliente asociado')` inside the sale transaction (rolls back everything) instead of silently skipping the receivable. The design's "Receivable if balance > 0" holds whenever a customer is attached; walk-in credit is rejected with a clear message.
+2. **`receivePurchaseOrder` status vocabulary**: the schema comment lists PO statuses `PENDING | RECEIVED | CANCELLED` while the entity also declares `ORDERED` and the design's data flow uses ORDERED → RECEIVED. Since `PurchaseOrder.status` is a free `String` (no DB enum), receive accepts `PENDING | ORDERED` and advances to `RECEIVED` when complete (partial keeps `ORDERED`), matching the design; a `CANCELLED` PO is rejected with 409.
+3. **Commit split by behavior (process)**: the repo file changes were staged hunk-by-hunk (`git add -p`) into 3 cohesive work-unit commits (sale flow / PO receive / cash open+close) instead of one blob commit; each commit passed the husky lint+typecheck hooks and compiles standalone. Port declaration for `receivePurchaseOrder` shipped in the same commit as its Prisma implementation (per prior deviation 2 of batch 3).
+
 ### Batch 3 (S3a)
 
 1. **Port contract vs. concrete repo (forced type-compat adaptations)**: changing `CloseCashSessionInput` to `{sessionId, physicalCount}` and adding required `SaleEntity.paymentMethod/paidAmount/balance` broke the concrete repo + 2 route call sites at the type level (`PrismaDistributionRepository implements IDistributionRepository`). To keep `typecheck`/`build` green WITHOUT implementing S3b logic, minimal behavior-preserving adaptations landed in this batch: repo `closeCashSession` stores `physicalCount` as `closingAmount` AND `expectedAmount` with `difference: 0` (byte-identical to the S2 route bridge it replaces), repo `registerSale` maps `paymentMethod/paidAmount/balance` from input (paidAmount defaults to total, balance clamped ≥ 0), repo `getSales` maps the new DB columns directly, and the `cash/close` route passes the new input shape while `sales` route passes `paymentMethod/paidAmount` through. Full server-side close math, the sale transaction and receivable creation remain task 3.3.
@@ -127,16 +146,18 @@ Role matrix (verified against `specs/distribution-access-control` + per-capabili
 
 ## Issues Found
 
+- **Batch 4**: None blocking. DB stays untouched (no `db:seed`, no `migrate dev`); the seeded smoke (counter continuity, dup-open 409, over-receive 409) remains the S5 gate under user supervision with DB backup.
+
 - **Environment lock (resolved)**: the first `npx prisma generate` failed with `EPERM: rename query_engine-windows.dll.node` because a `next dev` server was running and held the Prisma engine DLL memory-mapped (Windows). The dev server tree was stopped (`taskkill /PID 29948 /T /F` after user authorization), then `prisma generate` succeeded. The dev server must be restarted to pick up the regenerated client + new schema.
 - None blocking for S2. Compatibility reads confirmed: `SuppliersView`/`EmployeesView` send `''` for optional fields → `nullableEmail`/`nullableText` accept and preserve empty strings (no regression); `SalesPOSView` sale payload unchanged (payment fields optional); POS `/tax` GET stays STAFF-accessible so STAFF checkout tax computation is unaffected.
 
 ## Workload / PR Boundary
 
 - Mode: chained PR slice #3 (feature-branch-chain; PR #3 base = `feat/distribution-complete-02-security`; tracker `feat/distribution-complete`; later PRs base = immediate previous PR branch)
-- Current work unit: S3a P0 data layer — commits on `feat/distribution-complete-03-p0`: `feat(db)` (schema + migration), `feat(core)` (entities + ports + consumer adaptation), `chore(sdd)` (task-marking)
-- Boundary: start = `feat/distribution-complete-02-security` tip `4256d2d`; end = the `chore(sdd)` commit on `feat/distribution-complete-03-p0` (do NOT open the PR from apply)
-- Estimated review budget impact: ~380–420 changed lines across the 3 commits (schema+DDL ~230, core/ports+adaptations ~160) — S3a was forecast at ~330 est.; PR #3 remains the planned slice, pending user confirmation to open the PR.
+- Current work unit: S3b P0 repo transaction logic + seed continuity — new commits on `feat/distribution-complete-03-p0`: `feat(distribution)` sale flow, `feat(distribution)` PO receive, `feat(distribution)` cash open/close, `feat(db)` seed, `chore(sdd)` task-marking
+- Boundary: start = S3a tip `46098e7`; end = the `chore(sdd)` commit on `feat/distribution-complete-03-p0` (do NOT open the PR from apply)
+- Estimated review budget impact: ~320 authored lines across the 5 commits (repo ~170, port ~5, seed ~86, chore ~60); S3b units stay inside the work-unit slice (repo split across 3 behavior commits per deviation 3)
 
 ## Status
 
-11/25 tasks complete (S1 + S2 + S3a: tasks 1.1–1.2, 2.1–2.7, 3.1–3.2). Ready for next batch: S3b (tasks 3.3–3.4, repo transaction logic + seed) on its own child PR branch based on `feat/distribution-complete-03-p0`.
+13/25 tasks complete (S1 + S2 + S3a + S3b: tasks 1.1–1.2, 2.1–2.7, 3.1–3.4). Ready for next batch: S3c (tasks 3.5–3.6, routes incl. tax/config, customers, POs + receive route, employees, cash open-409 + close) on the same branch `feat/distribution-complete-03-p0`.
