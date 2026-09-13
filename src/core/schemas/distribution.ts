@@ -151,13 +151,15 @@ export const registerSaleSchema = z.object({
   personId: nullableText,
   notes: nullableText,
   paymentMethod: z.enum(['CASH', 'CARD', 'TRANSFER', 'CREDIT']).default('CASH'),
+  // Only the tendered amount is client input; `balance` is derived server-side
+  // (total − paidAmount) inside the sale transaction and never accepted here.
   paidAmount: nonNegativeNumber.optional(),
-  balance: nonNegativeNumber.optional(),
 });
 
-/** Legacy list query: `limit` cap keeps the current `take 500` contract; pagination lands in P1. */
+/** List query for `GET /sales`: paginated, tenant-scoped (limit 1..100; out-of-range pages → empty). */
 export const salesListQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(500).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
 // ---------------------------------------------------------------------------

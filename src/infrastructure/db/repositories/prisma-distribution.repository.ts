@@ -31,6 +31,7 @@ import type {
   FiscalSummary,
   InvoicingConfigEntity,
   InventoryStockItem,
+  PaginatedResult,
   PaymentMethod,
   PurchaseOrderEntity,
   RecentSale,
@@ -1628,43 +1629,57 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     };
   }
 
-  async getSales(tenantId: string, limit = 100): Promise<SaleEntity[]> {
-    const rows = await prisma.sale.findMany({
-      where: { tenantId },
-      orderBy: { createdAt: 'desc' },
-      take: Math.min(Math.max(limit, 1), 500),
-      include: {
-        person: { select: { firstName: true, lastName: true } },
-        items: { include: { item: { select: { name: true } } } },
-      },
-    });
+  async getSales(
+    tenantId: string,
+    page = 1,
+    limit = 20
+  ): Promise<PaginatedResult<SaleEntity>> {
+    const skip = (page - 1) * limit;
+    const [rows, total] = await Promise.all([
+      prisma.sale.findMany({
+        where: { tenantId },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          person: { select: { firstName: true, lastName: true } },
+          items: { include: { item: { select: { name: true } } } },
+        },
+      }),
+      prisma.sale.count({ where: { tenantId } }),
+    ]);
 
-    return rows.map((s) => ({
-      id: s.id,
-      tenantId: s.tenantId,
-      cashSessionId: s.cashSessionId,
-      personId: s.personId,
-      customerName: s.person
-        ? `${s.person.firstName} ${s.person.lastName}`
-        : null,
-      subtotal: s.subtotal.toNumber(),
-      taxAmount: s.taxAmount.toNumber(),
-      discount: s.discount.toNumber(),
-      total: s.total.toNumber(),
-      paymentMethod: s.paymentMethod as PaymentMethod,
-      paidAmount: s.paidAmount.toNumber(),
-      balance: s.balance.toNumber(),
-      invoiceNumber: s.invoiceNumber,
-      status: s.status,
-      createdAt: s.createdAt,
-      notes: s.notes,
-      items: s.items.map((si) => ({
-        id: si.id,
-        itemId: si.itemId,
-        itemName: si.item.name,
-        quantity: si.quantity,
-        price: si.price.toNumber(),
+    return {
+      items: rows.map((s) => ({
+        id: s.id,
+        tenantId: s.tenantId,
+        cashSessionId: s.cashSessionId,
+        personId: s.personId,
+        customerName: s.person
+          ? `${s.person.firstName} ${s.person.lastName}`
+          : null,
+        subtotal: s.subtotal.toNumber(),
+        taxAmount: s.taxAmount.toNumber(),
+        discount: s.discount.toNumber(),
+        total: s.total.toNumber(),
+        paymentMethod: s.paymentMethod as PaymentMethod,
+        paidAmount: s.paidAmount.toNumber(),
+        balance: s.balance.toNumber(),
+        invoiceNumber: s.invoiceNumber,
+        status: s.status,
+        createdAt: s.createdAt,
+        notes: s.notes,
+        items: s.items.map((si) => ({
+          id: si.id,
+          itemId: si.itemId,
+          itemName: si.item.name,
+          quantity: si.quantity,
+          price: si.price.toNumber(),
+        })),
       })),
-    }));
+      page,
+      limit,
+      hasMore: page * limit < total,
+    };
   }
 }

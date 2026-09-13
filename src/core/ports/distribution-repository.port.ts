@@ -10,6 +10,7 @@ import type {
   FiscalSummary,
   InvoicingConfigEntity,
   InventoryStockItem,
+  PaginatedResult,
   PaymentMethod,
   PurchaseOrderEntity,
   SaleEntity,
@@ -264,5 +265,14 @@ export interface IDistributionRepository {
     input: UpdateInvoicingConfigInput
   ): Promise<InvoicingConfigEntity>;
   registerSale(tenantId: string, input: RegisterSaleInput): Promise<SaleEntity>;
-  getSales(tenantId: string, limit?: number): Promise<SaleEntity[]>;
+  /**
+   * Paginated sales history (tenant-scoped). `page` 1-based; `limit` 1..100 —
+   * schema rejects out-of-bounds limits with 400, out-of-range pages return an
+   * empty `items` list with `hasMore: false`.
+   */
+  getSales(
+    tenantId: string,
+    page?: number,
+    limit?: number
+  ): Promise<PaginatedResult<SaleEntity>>;
 }

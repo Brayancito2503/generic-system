@@ -17,8 +17,8 @@ export async function GET(request: NextRequest) {
     );
     if (!query.success) throw new ApiError(400, 'Datos inválidos');
 
-    const sales = await repository.getSales(tenantId, query.data.limit ?? 100);
-    return NextResponse.json(sales);
+    const result = await repository.getSales(tenantId, query.data.page, query.data.limit);
+    return NextResponse.json(result);
   } catch (error) {
     return handleApiError(error);
   }
@@ -34,8 +34,8 @@ export async function POST(request: NextRequest) {
     const parsed = registerSaleSchema.safeParse(body);
     if (!parsed.success) throw new ApiError(400, 'Datos inválidos');
 
-    // paymentMethod/paidAmount flow through the port; server-side money math
-    // and receivable creation land in P1.
+    // Server-side money math (total − paidAmount = balance) and receivable
+    // creation happen inside the registerSale transaction.
     const sale = await repository.registerSale(tenantId, {
       lines: parsed.data.lines,
       discount: parsed.data.discount,
