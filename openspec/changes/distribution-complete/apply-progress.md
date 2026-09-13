@@ -88,13 +88,14 @@ Role matrix (verified against `specs/distribution-access-control` + per-capabili
 - [x] 3.2 `src/core/entities/distribution.ts` M: `PaymentMethod`/`ReceivableStatus` unions, SaleEntity.paymentMethod/paidAmount/balance, PurchaseOrderItemEntity.receivedQty, InvoicingConfigEntity, ReceivableEntity, ReceivablePaymentEntity, SaleReturnEntity, SaleReturnItemEntity, `PaginatedResult<T>` {items/page/limit/hasMore}; `src/core/ports/distribution-repository.port.ts` M: `CloseCashSessionInput {sessionId, physicalCount}` (expected/difference no longer client input), `RegisterSaleInput.paymentMethod/paidAmount`, input contracts CreateCustomer/UpdateCustomer/CreatePurchaseOrder/ReceivePurchaseOrder/UpdateEmployee/UpdateInvoicingConfig; NO `any` [S3a]
 - [x] 3.3 `src/infrastructure/db/repositories/prisma-distribution.repository.ts` M: `registerSale` now runs the FULL server-side money in one `$transaction` — stock decrement (`updateMany` with `stock >= qty` guard → `ApiError(409, 'Stock insuficiente…')`), SaleCounter upsert+increment (`INV-YYYYMMDD-######`, next after seed 16 → first real sale `INV-…-000017`), Sale + items with PERSISTED `paymentMethod/paidAmount/balance`, and `Receivable` opened in the same tx when `balance > 0` (credit sales require a customer → `ApiError(400)`); all throws are now typed `ApiError` (400 malformed / 404 missing customer / 409 stock). `openCashSession` gains the single-open-session guard (`ApiError(409, 'Ya existe una sesión de caja abierta')`). `closeCashSession` computes server-side `expected = opening + Σmovements(IN−OUT) + Σsales − Σreturns` and `difference = physicalCount − expected` (client expected/difference never read; returns persist the derived values as `closingAmount/expectedAmount/difference`). NEW `receivePurchaseOrder` (port method shipped with impl): 404 cross-tenant, 409 over-receive (`quantity − receivedQty` guard), inventory increment + `receivedQty` update + ORDERED → RECEIVED when complete, all in one `$transaction` — greps: `$transaction` at repo lines 873/910/1072, SaleCounter upsert at 1119–1123, close derivation at 774–779 [S3b]
 - [x] 3.4 Open question — SaleCounter continuity: `prisma/seed.ts` M: upsert `SaleCounter { update: { lastNumber: 16 }, create: { lastNumber: 16 } }` AFTER the 16 `FAC-*` sales (seed lines 371–379; sales untouched at 352–369), items added to the 3 seeded POs (PO-001 fully received / PO-002 pending / PO-003 partially received → receive smoke can complete it), default `InvoicingConfig` row (upsert, seed lines 381–392), plus defensive `deleteMany` coverage for the new tables; verified against current schema by `tsc --noEmit`; seed NOT run (DB read-only this batch) [S3b]
-- [ ] 3.5 Routes: `src/app/api/distribution/tax/config/route.ts` C GET/PUT TENANT_ADMIN+Zod; `customers/route.ts` M POST; `customers/[id]/route.ts` C PATCH; `purchase-orders/route.ts` M POST; `purchase-orders/[id]/receive/route.ts` C POST (409 over-receive) [S3c]
-- [ ] 3.6 Open question — employee→User PIN link: `employees/[id]/route.ts` C PATCH/deactivate + User link (upsert User: personId = employee.personId, bcrypt(PIN) → posPinHash, role STAFF, same tx); `cash/route.ts` M open-409; `cash/close/route.ts` M physicalCount-only server close [S3c]
+- [x] 3.5 Routes: `src/app/api/distribution/tax/config/route.ts` C GET/PUT TENANT_ADMIN+Zod; `customers/route.ts` M POST; `customers/[id]/route.ts` C PATCH; `purchase-orders/route.ts` M POST; `purchase-orders/[id]/receive/route.ts` C POST (409 over-receive) [S3c]
+- [x] 3.6 Open question — employee→User PIN link: `employees/[id]/route.ts` C PATCH/deactivate + User link (upsert User: personId = employee.personId, bcrypt(PIN) → posPinHash, role STAFF, same tx); `cash/route.ts` M open-409; `cash/close/route.ts` M physicalCount-only server close [S3c]
 - [x] 3.7 Views: `TaxAndInvoicingView.tsx` M (server CAI, drop fake local state + hardcoded `000-001-01-00001249`), `CashRegisterView.tsx` M, `CustomersView.tsx` C, `EmployeesView.tsx` M, `SuppliersView.tsx` M (PO create/receive), `DistributionModuleApp.tsx` M (customers tab); i18n es+en [S3d]
 
 ### Pending (not part of this batch)
 
-- [ ] 4.1–4.4 Phase 4 S4 P1 (100%) [S4a–S4d]
+- [x] 4.1 Phase 4 S4a — sales pagination, audited returns, receivables list + payments (batch 7)
+- [ ] 4.2–4.4 Phase 4 S4 P1 (100%) [S4b–S4d]
 - [ ] 5.1–5.5 Phase 5 S5 Base Shell + Admin [S5a/S5b]
 
 ## Verification Evidence (branch `feat/distribution-complete-03-p0`, post-edits)
@@ -216,6 +217,33 @@ Role matrix (verified against `specs/distribution-access-control` + per-capabili
 - Boundary: start = S3c chore tip `4639384`; end = the `chore(sdd)` commit on `feat/distribution-complete-03-p0` (do NOT open the PR from apply)
 - Estimated review budget impact: ~1,790 authored lines across the 7 commits (tax ~450, cash ~130, customers ~320, employees ~570, suppliers ~710, shell ~7, chore ~30 — deltas; includes i18n key blocks both locales in each view commit); units stay inside the work-unit slice (one view domain per commit)
 
+## Batch 7 (S4a) — sales/returns/receivables routes+repo (task 4.1, PR #4)
+
+### Verification (Batch 7)
+
+| Command | Result |
+|---|---|
+| `npm run lint` | exit 0 (eslint clean, 0 errors 0 warnings; husky pre-commit passed on each of the 3 code commits) |
+| `npm run typecheck` | exit 0 (`tsc --noEmit` clean on every commit — each code commit compiles standalone; stale `.next/types` referencing the not-yet-restored routes was cleared ONCE mid-split, see deviation 2) |
+| `npm run build` | exit 0; Next.js 16.3.4 production build after the split; new routes compiled `ƒ`: `/api/distribution/sales/[id]/returns`, `/api/distribution/receivables`, `/api/distribution/receivables/[id]/pay` |
+| Grep proof pagination | `page: z.coerce.number().int().min(1).default(1)` / `limit: z.coerce.number().int().min(1).max(100).default(20)` in schemas (sales + receivables); `hasMore: page * limit < total` in repo `getSales`/`getReceivables`; sales GET returns `PaginatedResult<SaleEntity>`; out-of-range page → empty list, invalid limit → 400 |
+| Grep proof returns | over-return 409 `La cantidad a devolver supera la cantidad vendida de "…"` (cumulative across prior returns), stock restore `stock: { increment: line.quantity }` in the sale-branch inventory (`cashSession.branchId`), `tx.saleReturn.create` audit row + nested items, receivable balance adjust + return-overpay 409 `La devolución supera el saldo pendiente de la cuenta por cobrar` |
+| Grep proof payments | 409 `El pago supera el saldo pendiente de la cuenta por cobrar` (payment > remaining balance), `tx.receivablePayment.create`, receivable update → PARTIAL/PAID, 404 `Cuenta por cobrar no encontrada` |
+| `git status --porcelain` | clean of code changes after the `chore(sdd)` commit; only `?? openspec/changes/distribution-complete/{proposal.md, design.md, specs/}` untracked (= expected OpenSpec trail, never staged with code) |
+
+### Deviations from Design (Batch 7)
+
+1. **Commit split by behavior (process)**: the batch shipped as 3 code commits + this chore (sales pagination / audited returns / receivables), each passing the husky lint+typecheck hooks and compiling standalone (work-unit convention from batches 4–6). The split used a checkout-reapply dance: each commit's slice was re-applied on top of the previous commit and verified by `tsc` before committing; the final state was byte-verified (CRLF-normalized) against the pre-split passing files, so the sum of the 3 commits equals the single-pass implementation.
+2. **Stale `.next` route types (process)**: mid-split, `tsc --noEmit` failed on `.next/types/validator.ts` referencing the three not-yet-restored route modules (leftovers from the pre-split full build). Fixed by deleting `.next` once (same pattern as S1); the final `next build` regenerates it — no code impact.
+3. **Repo typed against the real Prisma schema (content, forced by `tsc`)**: the first returns pass used invented relation/field names (`saleReturn` relation, `sale.branchId`, `refundAt`); `tsc` rejected them against the generated client. Correct names from `prisma/schema.prisma`: relation `return` on `SaleReturnItem`, branch via `cashSession.branchId`, column `refundAmount`. No spec-visible change: same 400/404/409 surface, same transaction semantics (one `$transaction`, whole-return rollback).
+4. **Credit-sale receivable edges (content)**: a return on a balance-zero sale is a pure cash refund (no receivable adjustment); a return on a credit sale reduces the open receivable and 409s when the refund would exceed the remaining balance (balance can never go negative — mixed cash/debt refunds are handled manually). Matches the S3b deviation-1 stance on credit sales.
+
+### Workload / PR Boundary (Batch 7)
+
+- Current work unit: S4a — new commits on `feat/distribution-complete-04-p1`: `3c09dcd` sales pagination, `a9728f5` audited returns + stock restore, `720adbe` receivables list + payments, + `chore(sdd)` task-marking (this batch)
+- Boundary: start = P0 tip `606cbea`; end = the `chore(sdd)` commit on `feat/distribution-complete-04-p1` (do NOT open the PR from apply)
+- Estimated review budget impact: ~550 changed lines across the 4 commits (commit stats: +71/−44, +243, +235, +chore); units stay inside the work-unit slice (repo split across 2 behavior commits, routes split by feature)
+
 ## Status
 
-16/25 tasks complete (S1 + S2 + S3a + S3b + S3c + S3d: tasks 1.1–1.2, 2.1–2.7, 3.1–3.7; plus user-approved `POST /api/auth/pos-login`). Phase 3 (P0, sale-blocking) fully closed. Ready for next batch: S4 (task 4.1–4.4 — sales payment/returns, receivables, suppliers/inventory maintenance, real dashboard trends, POS/dashboard/inventory/history views + i18n) on a new branch `feat/distribution-complete-04-p1` (base = P0 tip; do NOT open the PR from apply).
+17/25 tasks complete (S1 + S2 + S3a + S3b + S3c + S3d + S4a: tasks 1.1–1.2, 2.1–2.7, 3.1–3.7, 4.1; plus user-approved `POST /api/auth/pos-login`). Phase 3 (P0, sale-blocking) fully closed; Phase 4 S4a closed. Ready for next batch: S4b (task 4.2 — suppliers PATCH/deactivate, inventory branchId-scoped update + negative-value guards, referenced-delete 409) on the same branch `feat/distribution-complete-04-p1` (base = P0 tip; do NOT open the PR from apply).
