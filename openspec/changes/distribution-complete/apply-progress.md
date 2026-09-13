@@ -158,6 +158,36 @@ Role matrix (verified against `specs/distribution-access-control` + per-capabili
 - Boundary: start = S3a tip `46098e7`; end = the `chore(sdd)` commit on `feat/distribution-complete-03-p0` (do NOT open the PR from apply)
 - Estimated review budget impact: ~320 authored lines across the 5 commits (repo ~170, port ~5, seed ~86, chore ~60); S3b units stay inside the work-unit slice (repo split across 3 behavior commits per deviation 3)
 
+## Batch 5 (S3c) — routes: tax/config, customers, POs, employees, POS login
+
+### Verification (Batch 5)
+
+| Command | Result |
+|---|---|
+| `npm run lint` | exit 0 (eslint clean, 0 errors 0 warnings) |
+| `npm run typecheck` | exit 0 (`tsc --noEmit` clean; new route files + 7 repo methods typecheck) |
+| `npm run build` | exit 0; Next.js 16.3.4 production build; new routes compiled `ƒ`: `/api/auth/pos-login`, `/api/distribution/tax/config`, `/api/distribution/customers/[id]`, `/api/distribution/purchase-orders/[id]/receive`, `/api/distribution/employees/[id]` (full route table lists 27 app routes) |
+| Grep proof port | `linkEmployeeUser` (port line 227) + `createCustomer/updateCustomer/createPurchaseOrder/updateEmployee/getInvoicingConfig/updateInvoicingConfig` all declared in `IDistributionRepository` and implemented in the Prisma adapter |
+| Grep proof deactivate | `data: { posPinHash: null }` revoke inside the same transaction as `isActive: false` (repo line 815) |
+| Grep proof 409s | receive over-quantity/cancelled (repo 462/433), cash dup-open `Ya existe una sesión de caja abierta` (repo 959), cash close already-closed (1035) — all pass through `handleApiError` untouched; receive route asserts it (line 26) |
+| `git status --porcelain` | clean of code changes after commit 6; only `?? openspec/changes/distribution-complete/{proposal.md, design.md, specs/}` untracked (= expected OpenSpec trail, never staged with code) |
+
+### Deviations from Design (Batch 5)
+
+1. **`POST /api/auth/pos-login` added (user-approved supplement, beyond tasks.md)**: tenant-scoped PIN login `{ tenant: slug, pin, employeeId? }`, token/cookie mechanics cloned from `/api/auth/login` (jose HS256 `gs_session`). Scoped to the tenant by slug and to `role: STAFF` users with a stored `posPinHash` AND an active linked Employee. Unlike the legacy POS mode in `/api/auth/login` (which brute-forces every user with a PIN across ALL tenants — a tenant leak), this route cannot cross tenants. `errors.posLogin` added to both message files.
+2. **Employment POST + PIN wiring (2 lines)**: task 3.6 only names the PATCH route, but the create schema already validated `pin` ("wired to the User link in P0"); the POST now calls `linkEmployeeUser` after create when a PIN was sent. The link runs in its own transaction — a link failure leaves the employee created (retryable), documented in the route.
+3. **Cash routes: verify-only, no code change**: the 409 open-session mapping and physicalCount-only server close already shipped in S2 (legacy `closingAmount` bridge kept until S3d UI switch). Task 3.6's cash items are satisfied by the existing commits (`488b683`, `757595f`); nothing extra was needed.
+4. **`PurchaseOrder.expectedDate` documented as not persisted**: the entity exposes an `expectedDate` field and the create/receive flows compute it (`receivedAt ?? createdAt`), but the S3a schema has no `expectedDate` column; client input is accepted by the schema and ignored at the repo boundary (noted in the repo comment). No DDL added — if a real expected-date column is wanted later it is a small additive migration.
+5. **`orderNumber` is display-only**: created as `PO-<year>-<seq>` where seq = `count + 1` inside the create transaction (no counter table, no unique constraint — matches the pre-existing seed/`SaleCounter` discussion; a cosmetic race is acceptable and documented in code). The purchase-order spec does not require uniqueness.
+6. **POST employees is two transactions (create, then link-user)**: the link itself is transactional (upsert User with bcrypt PIN + nonce password); the create is intentionally NOT merged into it, keeping `linkEmployeeUser`'s UPDATE semantics (404 if the employee does not exist) intact for the PATCH route.
+7. **Commit split (process)**: 5 behavior commits + 1 chore; each passed husky hooks (lint + typecheck run per commit). Commit 5 (`feat(auth)`) includes both the route and the es/en i18n keys so the work unit is self-contained. One commit-msg hook rejection (header >100 chars) was fixed by shortening the subject (same content); `subject-case` rule requires a lowercase subject start (matches prior commits).
+
+### Workload / PR Boundary (Batch 5)
+
+- Current work unit: S3c routes — new commits on `feat/distribution-complete-03-p0`: `7183e50` repo contracts P0, `05f2a82` tax config + customers, `ea5a73e` PO create + receive, `da7ed57` employee PATCH + POST pin, `cd5061b` auth pos-login + i18n, + `chore(sdd)` task-marking (this batch)
+- Boundary: start = S3b tip `db4e9df`; end = the `chore(sdd)` commit on `feat/distribution-complete-03-p0` (do NOT open the PR from apply)
+- Estimated review budget impact: ~620 authored lines across the 6 commits (port ~80, repo ~330, schemas ~5, routes ~180, i18n ~14, chore ~25); units stay inside the work-unit slice (repo layer ships as one behavior commit, routes split by feature)
+
 ## Status
 
-13/25 tasks complete (S1 + S2 + S3a + S3b: tasks 1.1–1.2, 2.1–2.7, 3.1–3.4). Ready for next batch: S3c (tasks 3.5–3.6, routes incl. tax/config, customers, POs + receive route, employees, cash open-409 + close) on the same branch `feat/distribution-complete-03-p0`.
+15/25 tasks complete (S1 + S2 + S3a + S3b + S3c: tasks 1.1–1.2, 2.1–2.7, 3.1–3.6; plus user-approved `POST /api/auth/pos-login`). Ready for next batch: S3d (task 3.7 views — TaxAndInvoicingView server CAI, CashRegisterView physicalCount, CustomersView tab, EmployeesView PIN/deactivate, SuppliersView PO create/receive, DistributionModuleApp customers tab; i18n es+en) on the same branch `feat/distribution-complete-03-p0`.
