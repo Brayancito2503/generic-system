@@ -86,6 +86,9 @@ export const createEmployeeSchema = z.object({
 });
 
 export const updateEmployeeSchema = createEmployeeSchema
+  .extend({
+    isActive: z.boolean().optional(),
+  })
   .partial()
   .refine(hasAnyDefinedField, { message: 'No hay campos válidos para actualizar' });
 

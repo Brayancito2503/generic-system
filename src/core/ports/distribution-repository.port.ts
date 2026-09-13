@@ -8,6 +8,7 @@ import type {
   DistributionDashboardStats,
   EmployeeEntity,
   FiscalSummary,
+  InvoicingConfigEntity,
   InventoryStockItem,
   PaymentMethod,
   PurchaseOrderEntity,
@@ -196,6 +197,10 @@ export interface IDistributionRepository {
   getSuppliers(tenantId: string): Promise<SupplierEntity[]>;
   createSupplier(tenantId: string, input: CreateSupplierInput): Promise<SupplierEntity>;
   getPurchaseOrders(tenantId: string): Promise<PurchaseOrderEntity[]>;
+  createPurchaseOrder(
+    tenantId: string,
+    input: CreatePurchaseOrderInput
+  ): Promise<PurchaseOrderEntity>;
   receivePurchaseOrder(
     tenantId: string,
     poId: string,
@@ -203,6 +208,27 @@ export interface IDistributionRepository {
   ): Promise<PurchaseOrderEntity>;
   getEmployees(tenantId: string): Promise<EmployeeEntity[]>;
   createEmployee(tenantId: string, input: CreateEmployeeInput): Promise<EmployeeEntity>;
+  /**
+   * PATCH semantics: undefined fields are left untouched; null clears nullable
+   * fields. When `isActive: false` is applied, the linked User's `posPinHash`
+   * is hard-revoked in the same transaction (deactivated employees never keep
+   * a live PIN credential).
+   */
+  updateEmployee(
+    tenantId: string,
+    employeeId: string,
+    input: UpdateEmployeeInput
+  ): Promise<EmployeeEntity>;
+  /**
+   * Links (or re-links) the employee's Person to a `User` with a bcrypt-hashed
+   * POS PIN (`role: STAFF`) in the same transaction that applies any other
+   * employee fields; requires `input.pin` (`^\d{4,6}$`).
+   */
+  linkEmployeeUser(
+    tenantId: string,
+    employeeId: string,
+    input: UpdateEmployeeInput
+  ): Promise<EmployeeEntity>;
   getOpenCashSession(tenantId: string): Promise<CashSessionEntity | null>;
   openCashSession(
     tenantId: string,
@@ -226,6 +252,17 @@ export interface IDistributionRepository {
   deleteTaxRate(tenantId: string, rateId: string): Promise<void>;
   getFiscalSummary(tenantId: string): Promise<FiscalSummary>;
   findCustomers(tenantId: string, query?: string): Promise<CustomerLight[]>;
+  createCustomer(tenantId: string, input: CreateCustomerInput): Promise<CustomerLight>;
+  updateCustomer(
+    tenantId: string,
+    customerId: string,
+    input: UpdateCustomerInput
+  ): Promise<CustomerLight>;
+  getInvoicingConfig(tenantId: string): Promise<InvoicingConfigEntity | null>;
+  updateInvoicingConfig(
+    tenantId: string,
+    input: UpdateInvoicingConfigInput
+  ): Promise<InvoicingConfigEntity>;
   registerSale(tenantId: string, input: RegisterSaleInput): Promise<SaleEntity>;
   getSales(tenantId: string, limit?: number): Promise<SaleEntity[]>;
 }

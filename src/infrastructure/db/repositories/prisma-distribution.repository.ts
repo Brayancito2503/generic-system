@@ -1,11 +1,19 @@
 import { prisma } from '../prisma';
 import { ApiError } from '@/lib/api-error';
+import { hashPassword } from '@/lib/security';
+import { randomUUID } from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import type {
   IDistributionRepository,
   CreateInventoryItemInput,
   UpdateInventoryItemInput,
   CreateSupplierInput,
   CreateEmployeeInput,
+  CreateCustomerInput,
+  UpdateCustomerInput,
+  CreatePurchaseOrderInput,
+  UpdateEmployeeInput,
+  UpdateInvoicingConfigInput,
   OpenCashSessionInput,
   AddCashMovementInput,
   CloseCashSessionInput,
@@ -21,6 +29,7 @@ import type {
   DistributionDashboardStats,
   EmployeeEntity,
   FiscalSummary,
+  InvoicingConfigEntity,
   InventoryStockItem,
   PaymentMethod,
   PurchaseOrderEntity,
@@ -34,6 +43,9 @@ interface EmployeePersonMetadata {
   department?: string;
   commissionRate?: number;
 }
+
+/** Employee row with its Person graph, shared by the entity mapper methods. */
+type EmployeeWithPerson = Prisma.EmployeeGetPayload<{ include: { person: true } }>;
 
 const DAY_LABELS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'] as const;
 
@@ -522,6 +534,134 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     };
   }
 
+  // ─── Purchase orders (create) ──────────────────────────────────────────────
+  async createPurchaseOrder(
+    tenantId: string,
+    input: CreatePurchaseOrderInput
+  ): Promise<PurchaseOrderEntity> {
+    const supplier = await prisma.supplier.findFirst({
+      where: { tenantId, id: input.supplierId },
+    });
+    if (!supplier) {
+      throw new ApiError(404, 'Proveedor no encontrado');
+    }
+    if (!supplier.isActive) {
+      throw new ApiError(400, 'El proveedor está inactivo');
+    }
+    const branch = await prisma.branch.findFirst({
+      where: { tenantId, id: input.branchId },
+    });
+    if (!branch) {
+      throw new ApiError(404, 'Sucursal no encontrada');
+    }
+
+    // Duplicate lines merge into one (same guard as the receive flow) so the
+    // quantity math below is always consistent.
+    const mergedLines = new Map<string, number>();
+    for (const line of input.items) {
+      if (!Number.isInteger(line.quantity) || line.quantity <= 0) {
+        throw new ApiError(400, 'Cantidad inválida en uno de los productos');
+      }
+      mergedLines.set(
+        line.itemId,
+        (mergedLines.get(line.itemId) ?? 0) + line.quantity
+      );
+    }
+    const lines = [...mergedLines.entries()].map(([itemId, quantity]) => ({
+      itemId,
+      quantity,
+    }));
+
+    const items = await prisma.item.findMany({
+      where: { tenantId, id: { in: lines.map((l) => l.itemId) } },
+    });
+    if (items.length !== lines.length) {
+      throw new ApiError(400, 'Uno o más productos no existen');
+    }
+    const itemById = new Map(items.map((i) => [i.id, i] as const));
+
+    const order = await prisma.$transaction(async (tx) => {
+      // PO value is priced at item cost; tax is extracted inclusively with the
+      // tenant's default rate, mirroring the registerSale money model.
+      const subtotal = lines.reduce((acc, l) => {
+        const item = itemById.get(l.itemId);
+        const cost = item ? item.cost.toNumber() : 0;
+        return acc + cost * l.quantity;
+      }, 0);
+
+      const defaultTax =
+        (await tx.taxRate.findFirst({
+          where: { tenantId, isDefault: true, isActive: true },
+          orderBy: { createdAt: 'asc' },
+        })) ??
+        (await tx.taxRate.findFirst({
+          where: { tenantId, isInclusive: true, isActive: true },
+          orderBy: { createdAt: 'asc' },
+        }));
+      const ratePct = defaultTax?.rate.toNumber() ?? 0;
+      const taxAmount =
+        ratePct > 0 ? Math.round(subtotal * (ratePct / (100 + ratePct)) * 100) / 100 : 0;
+      const total = Math.round(subtotal * 100) / 100;
+
+      // Display-only sequential number (no counter table); orderNumber is not
+      // unique, so a race here is cosmetic, never a consistency risk.
+      const seq = (await tx.purchaseOrder.count({ where: { tenantId } })) + 1;
+      const orderNumber = `PO-${new Date().getFullYear()}-${String(seq).padStart(3, '0')}`;
+
+      return tx.purchaseOrder.create({
+        data: {
+          tenantId,
+          supplierId: supplier.id,
+          branchId: branch.id,
+          orderNumber,
+          status: 'ORDERED',
+          subtotal,
+          taxAmount,
+          total,
+          notes: input.notes ?? null,
+          items: {
+            create: lines.map((l) => ({
+              itemId: l.itemId,
+              quantity: l.quantity,
+              cost: itemById.get(l.itemId)!.cost,
+            })),
+          },
+        },
+        include: {
+          supplier: true,
+          branch: true,
+          items: { include: { item: true } },
+        },
+      });
+    });
+
+    return {
+      id: order.id,
+      tenantId: order.tenantId,
+      supplierId: order.supplierId,
+      supplierName: order.supplier.name,
+      branchId: order.branchId,
+      orderNumber: order.orderNumber,
+      status: (order.status as PurchaseOrderEntity['status']) ?? 'ORDERED',
+      subtotal: order.subtotal.toNumber(),
+      taxAmount: order.taxAmount.toNumber(),
+      total: order.total.toNumber(),
+      notes: order.notes,
+      expectedDate: order.receivedAt ?? order.createdAt,
+      receivedAt: order.receivedAt,
+      createdAt: order.createdAt,
+      items: order.items.map((i) => ({
+        id: i.id,
+        orderId: i.orderId,
+        itemId: i.itemId,
+        itemName: i.item.name,
+        quantity: i.quantity,
+        receivedQty: i.receivedQty,
+        cost: i.cost.toNumber(),
+      })),
+    };
+  }
+
   // ─── Employees ──────────────────────────────────────────────────────────────
   async getEmployees(tenantId: string): Promise<EmployeeEntity[]> {
     const rows = await prisma.employee.findMany({
@@ -530,32 +670,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       orderBy: { createdAt: 'desc' },
     });
 
-    return rows.map((e) => {
-      const meta = (e.person.metadata ?? {}) as EmployeePersonMetadata;
-      return {
-        id: e.id,
-        tenantId: e.tenantId,
-        personId: e.personId,
-        firstName: e.person.firstName,
-        lastName: e.person.lastName,
-        email: e.person.email,
-        phone: e.person.phone,
-        branchId: e.branchId,
-        role: e.position,
-        department: meta.department ?? null,
-        salary: e.salary?.toNumber() ?? null,
-        commissionRate: meta.commissionRate ?? null,
-        hireDate: e.hireDate,
-        isActive: e.isActive,
-        createdAt: e.createdAt,
-        person: {
-          firstName: e.person.firstName,
-          lastName: e.person.lastName,
-          email: e.person.email,
-          phone: e.person.phone,
-        },
-      };
-    });
+    return rows.map((e) => this.toEmployeeEntity(e));
   }
 
   async createEmployee(
@@ -611,6 +726,177 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         phone: person.phone,
       },
     };
+  }
+
+  /**
+   * Shared employee PATCH path: applies field updates on the Person (with the
+   * department/commissionRate JSONB metadata merged) and the Employee row in
+   * one transaction. With `linkPin`, it also upserts the Person's User with a
+   * bcrypt-hashed POS PIN (`role: STAFF`), and with `isActive: false` it
+   * hard-revokes the User's `posPinHash` in the same transaction.
+   */
+  private async applyEmployeeUpdate(
+    tenantId: string,
+    employeeId: string,
+    input: UpdateEmployeeInput,
+    linkPin: boolean
+  ): Promise<EmployeeEntity> {
+    const pin = linkPin ? String(input.pin ?? '') : '';
+    if (linkPin && !/^\d{4,6}$/.test(pin)) {
+      throw new ApiError(400, 'Pin inválido');
+    }
+    // bcrypt is CPU-bound: hash before opening the transaction (the writes
+    // themselves stay atomic inside it).
+    const posPinHash = linkPin ? await hashPassword(pin) : null;
+    const newUserPasswordHash = linkPin
+      ? await hashPassword(randomUUID())
+      : null;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const employee = await tx.employee.findFirst({
+        where: { tenantId, id: employeeId },
+        include: { person: true },
+      });
+      if (!employee) {
+        throw new ApiError(404, 'Empleado no encontrado');
+      }
+
+      if (input.branchId !== undefined && input.branchId !== null) {
+        const branch = await tx.branch.findFirst({
+          where: { tenantId, id: input.branchId },
+        });
+        if (!branch) {
+          throw new ApiError(404, 'Sucursal no encontrada');
+        }
+      }
+      if (linkPin && employee.isActive === false) {
+        throw new ApiError(400, 'No se puede asignar un PIN a un empleado inactivo');
+      }
+
+      // Person fields follow PATCH semantics: undefined = untouched, null = clear.
+      const personData: Prisma.PersonUpdateInput = {};
+      if (input.firstName !== undefined) personData.firstName = input.firstName;
+      if (input.lastName !== undefined) personData.lastName = input.lastName;
+      if (input.email !== undefined) personData.email = input.email;
+      if (input.phone !== undefined) personData.phone = input.phone;
+
+      const currentMeta = (employee.person.metadata ?? {}) as EmployeePersonMetadata;
+      personData.metadata = {
+        department:
+          input.department === undefined
+            ? currentMeta.department ?? null
+            : input.department,
+        commissionRate:
+          input.commissionRate === undefined
+            ? currentMeta.commissionRate ?? null
+            : input.commissionRate ?? null,
+      };
+      await tx.person.update({
+        where: { id: employee.personId },
+        data: personData,
+      });
+
+      const employeeData: Prisma.EmployeeUncheckedUpdateInput = {};
+      if (input.role !== undefined) employeeData.position = input.role;
+      if (input.salary !== undefined) employeeData.salary = input.salary;
+      if (input.hireDate !== undefined) employeeData.hireDate = input.hireDate;
+      if (input.isActive !== undefined) employeeData.isActive = input.isActive;
+      if (input.branchId !== undefined) employeeData.branchId = input.branchId;
+
+      // Deactivate → hard-revoke the POS PIN (spec: "marked inactive, no
+      // longer selectable"; the PIN credential dies with the role).
+      if (input.isActive === false) {
+        await tx.user.updateMany({
+          where: {
+            tenantId,
+            personId: employee.personId,
+            posPinHash: { not: null },
+          },
+          data: { posPinHash: null },
+        });
+      }
+
+      if (linkPin) {
+        // User.email: the Person's email when it is free inside the tenant,
+        // otherwise a synthetic per-person address (link-only accounts never
+        // sign in by email+password — passwordHash is a random nonce).
+        const emailForUser =
+          employee.person.email &&
+          !(await tx.user.findFirst({
+            where: {
+              tenantId,
+              email: employee.person.email,
+              personId: { not: employee.personId },
+            },
+          }))
+            ? employee.person.email
+            : `${employee.personId}@pos.local`;
+
+        await tx.user.upsert({
+          where: { personId: employee.personId },
+          update: { posPinHash },
+          create: {
+            tenantId,
+            personId: employee.personId,
+            email: emailForUser,
+            passwordHash: newUserPasswordHash!,
+            posPinHash,
+            role: 'STAFF',
+          },
+        });
+      }
+
+      return tx.employee.update({
+        where: { id: employee.id },
+        data: employeeData,
+        include: { person: true },
+      });
+    });
+
+    return this.toEmployeeEntity(updated);
+  }
+
+  private toEmployeeEntity(e: EmployeeWithPerson): EmployeeEntity {
+    const meta = (e.person.metadata ?? {}) as EmployeePersonMetadata;
+    return {
+      id: e.id,
+      tenantId: e.tenantId,
+      personId: e.personId,
+      firstName: e.person.firstName,
+      lastName: e.person.lastName,
+      email: e.person.email,
+      phone: e.person.phone,
+      branchId: e.branchId,
+      role: e.position,
+      department: meta.department ?? null,
+      salary: e.salary?.toNumber() ?? null,
+      commissionRate: meta.commissionRate ?? null,
+      hireDate: e.hireDate,
+      isActive: e.isActive,
+      createdAt: e.createdAt,
+      person: {
+        firstName: e.person.firstName,
+        lastName: e.person.lastName,
+        email: e.person.email,
+        phone: e.person.phone,
+      },
+    };
+  }
+
+  async updateEmployee(
+    tenantId: string,
+    employeeId: string,
+    input: UpdateEmployeeInput
+  ): Promise<EmployeeEntity> {
+    return this.applyEmployeeUpdate(tenantId, employeeId, input, false);
+  }
+
+  async linkEmployeeUser(
+    tenantId: string,
+    employeeId: string,
+    input: UpdateEmployeeInput
+  ): Promise<EmployeeEntity> {
+    return this.applyEmployeeUpdate(tenantId, employeeId, input, true);
   }
 
   // ─── Cash ───────────────────────────────────────────────────────────────────
@@ -977,6 +1263,75 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     };
   }
 
+  // ─── Invoicing / CAI config ────────────────────────────────────────────────
+  async getInvoicingConfig(tenantId: string): Promise<InvoicingConfigEntity | null> {
+    const config = await prisma.invoicingConfig.findUnique({
+      where: { tenantId },
+    });
+    return config ? this.toInvoicingConfigEntity(config) : null;
+  }
+
+  async updateInvoicingConfig(
+    tenantId: string,
+    input: UpdateInvoicingConfigInput
+  ): Promise<InvoicingConfigEntity> {
+    const updateData: Prisma.InvoicingConfigUpdateInput = {
+      ...(input.caiNumber !== undefined ? { caiNumber: input.caiNumber } : {}),
+      ...(input.rangeFrom !== undefined ? { rangeFrom: input.rangeFrom } : {}),
+      ...(input.rangeTo !== undefined ? { rangeTo: input.rangeTo } : {}),
+      ...(input.limitDate !== undefined ? { limitDate: input.limitDate } : {}),
+      ...(input.companyTaxId !== undefined
+        ? { companyTaxId: input.companyTaxId }
+        : {}),
+      ...(input.legalName !== undefined ? { legalName: input.legalName } : {}),
+    };
+    // All five CAI fields are required by the PUT schema, so an upsert-create
+    // with only scalars fully satisfies InvoicingConfigCreateInput.
+    const createData: Prisma.InvoicingConfigUncheckedCreateInput = {
+      tenantId,
+      caiNumber: input.caiNumber ?? '',
+      rangeFrom: input.rangeFrom ?? '',
+      rangeTo: input.rangeTo ?? '',
+      ...(input.limitDate !== undefined ? { limitDate: input.limitDate } : {}),
+      companyTaxId: input.companyTaxId ?? '',
+      legalName: input.legalName ?? '',
+    };
+
+    const config = await prisma.invoicingConfig.upsert({
+      where: { tenantId },
+      update: updateData,
+      create: createData,
+    });
+
+    return this.toInvoicingConfigEntity(config);
+  }
+
+  private toInvoicingConfigEntity(config: {
+    id: string;
+    tenantId: string;
+    caiNumber: string;
+    rangeFrom: string;
+    rangeTo: string;
+    limitDate: Date | null;
+    companyTaxId: string;
+    legalName: string;
+    createdAt: Date;
+    updatedAt: Date;
+  }): InvoicingConfigEntity {
+    return {
+      id: config.id,
+      tenantId: config.tenantId,
+      caiNumber: config.caiNumber,
+      rangeFrom: config.rangeFrom,
+      rangeTo: config.rangeTo,
+      limitDate: config.limitDate,
+      companyTaxId: config.companyTaxId,
+      legalName: config.legalName,
+      createdAt: config.createdAt,
+      updatedAt: config.updatedAt,
+    };
+  }
+
   // ─── Sales (POS) ────────────────────────────────────────────────────────────
   async findCustomers(
     tenantId: string,
@@ -1008,6 +1363,71 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       email: p.email,
       phone: p.phone,
     }));
+  }
+
+  async createCustomer(
+    tenantId: string,
+    input: CreateCustomerInput
+  ): Promise<CustomerLight> {
+    const created = await prisma.person.create({
+      data: {
+        tenantId,
+        firstName: input.firstName,
+        lastName: input.lastName,
+        documentId: input.documentId ?? null,
+        email: input.email ?? null,
+        phone: input.phone ?? null,
+      },
+    });
+
+    return this.toCustomerLight(created);
+  }
+
+  async updateCustomer(
+    tenantId: string,
+    customerId: string,
+    input: UpdateCustomerInput
+  ): Promise<CustomerLight> {
+    // Customers are Persons without an Employee record; employee persons are
+    // never editable through the customers surface (tenant-scoped, 404).
+    const existing = await prisma.person.findFirst({
+      where: { tenantId, id: customerId, employee: null },
+    });
+    if (!existing) {
+      throw new ApiError(404, 'Cliente no encontrado');
+    }
+
+    const data: Prisma.PersonUpdateInput = {};
+    if (input.firstName !== undefined) data.firstName = input.firstName;
+    if (input.lastName !== undefined) data.lastName = input.lastName;
+    if (input.documentId !== undefined) data.documentId = input.documentId;
+    if (input.email !== undefined) data.email = input.email;
+    if (input.phone !== undefined) data.phone = input.phone;
+
+    const updated = await prisma.person.update({
+      where: { id: customerId },
+      data,
+    });
+
+    return this.toCustomerLight(updated);
+  }
+
+  private toCustomerLight(p: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    documentId: string | null;
+    email: string | null;
+    phone: string | null;
+  }): CustomerLight {
+    return {
+      id: p.id,
+      firstName: p.firstName,
+      lastName: p.lastName,
+      documentId: p.documentId,
+      email: p.email,
+      phone: p.phone,
+    };
   }
 
   async registerSale(
