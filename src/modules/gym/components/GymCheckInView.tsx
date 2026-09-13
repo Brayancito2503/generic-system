@@ -1,27 +1,41 @@
 'use client';
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Search, CheckCircle2, XCircle, UserCheck, ShieldAlert, Clock, RefreshCw } from 'lucide-react';
 import { MockGymRepository } from '@/infrastructure/db/repositories/mock-gym.repository';
 import { CheckInAccessUseCase } from '@/modules/gym/use-cases/check-in-access.use-case';
 import { CheckInResult } from '@/core/ports/gym-repository.port';
+import { getMe } from '@/features/auth/api';
 
-const gymRepository = new MockGymRepository();
-const checkInUseCase = new CheckInAccessUseCase(gymRepository);
-
-export function GymCheckInView({ tenantId = 'powerfit-gym' }: { tenantId?: string }) {
+export function GymCheckInView() {
+  const [tenantId, setTenantId] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<CheckInResult | null>(null);
   const [logs, setLogs] = useState<Array<{ id: string; personName: string; granted: boolean; accessTime: Date; denialReason?: string | null }>>([]);
 
-  // Cargar logs al montar
+  // The tenant scope comes from the session (/api/auth/me); the client NEVER
+  // sends a tenantId. The mock instances are keyed on it so a tenant switch
+  // rebuilds the demo fixtures instead of leaking data across tenants.
+  useEffect(() => {
+    let active = true;
+    getMe().then((me) => {
+      if (active) setTenantId(me?.user.tenantId ?? null);
+    });
+    return () => { active = false; };
+  }, []);
+
+  const gymRepository = useMemo(() => new MockGymRepository(tenantId ?? ''), [tenantId]);
+  const checkInUseCase = useMemo(() => new CheckInAccessUseCase(gymRepository), [gymRepository]);
+
+  // Cargar logs al montar / cuando el tenant de sesión esté resuelto
   const fetchLogs = useCallback(async () => {
+    if (!tenantId) return;
     const recentLogs = await gymRepository.getRecentLogs(tenantId, 8);
     setLogs(recentLogs);
-  }, [tenantId]);
+  }, [tenantId, gymRepository]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     fetchLogs();
   }, [fetchLogs]);
 
@@ -33,6 +47,7 @@ export function GymCheckInView({ tenantId = 'powerfit-gym' }: { tenantId?: strin
     setResult(null);
 
     try {
+      if (!tenantId) return;
       const res = await checkInUseCase.execute(tenantId, searchInput);
       setResult(res);
       await fetchLogs();
@@ -45,6 +60,14 @@ export function GymCheckInView({ tenantId = 'powerfit-gym' }: { tenantId?: strin
       setLoading(false);
     }
   };
+
+  if (!tenantId) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-zinc-950 text-zinc-100">
+        <div className="text-sm text-zinc-400">Cargando sesión…</div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
