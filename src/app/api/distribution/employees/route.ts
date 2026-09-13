@@ -35,7 +35,9 @@ export async function POST(request: NextRequest) {
     const parsed = createEmployeeSchema.safeParse(body);
     if (!parsed.success) throw new ApiError(400, 'Datos inválidos');
 
-    // `pin` is validated here but wired to the User link (bcrypt hash) in P0.
+    // Employee record first; when a PIN was provided, link the Person to a
+    // User (bcrypt-hashed, role STAFF) right after — the link runs in its own
+    // transaction, so a link failure leaves the employee created (retryable).
     const created = await repository.createEmployee(tenantId, {
       firstName: parsed.data.firstName,
       lastName: parsed.data.lastName,
@@ -48,6 +50,12 @@ export async function POST(request: NextRequest) {
       commissionRate: parsed.data.commissionRate ?? null,
       hireDate: parsed.data.hireDate ?? new Date(),
     });
+
+    if (parsed.data.pin !== undefined) {
+      await repository.linkEmployeeUser(tenantId, created.id, {
+        pin: parsed.data.pin,
+      });
+    }
 
     return NextResponse.json(created, { status: 201 });
   } catch (error) {
