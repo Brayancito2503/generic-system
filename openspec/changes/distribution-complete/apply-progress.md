@@ -90,11 +90,10 @@ Role matrix (verified against `specs/distribution-access-control` + per-capabili
 - [x] 3.4 Open question — SaleCounter continuity: `prisma/seed.ts` M: upsert `SaleCounter { update: { lastNumber: 16 }, create: { lastNumber: 16 } }` AFTER the 16 `FAC-*` sales (seed lines 371–379; sales untouched at 352–369), items added to the 3 seeded POs (PO-001 fully received / PO-002 pending / PO-003 partially received → receive smoke can complete it), default `InvoicingConfig` row (upsert, seed lines 381–392), plus defensive `deleteMany` coverage for the new tables; verified against current schema by `tsc --noEmit`; seed NOT run (DB read-only this batch) [S3b]
 - [ ] 3.5 Routes: `src/app/api/distribution/tax/config/route.ts` C GET/PUT TENANT_ADMIN+Zod; `customers/route.ts` M POST; `customers/[id]/route.ts` C PATCH; `purchase-orders/route.ts` M POST; `purchase-orders/[id]/receive/route.ts` C POST (409 over-receive) [S3c]
 - [ ] 3.6 Open question — employee→User PIN link: `employees/[id]/route.ts` C PATCH/deactivate + User link (upsert User: personId = employee.personId, bcrypt(PIN) → posPinHash, role STAFF, same tx); `cash/route.ts` M open-409; `cash/close/route.ts` M physicalCount-only server close [S3c]
-- [ ] 3.7 Views: `TaxAndInvoicingView.tsx` M (server CAI, drop fake local state + hardcoded `000-001-01-00001249`), `CashRegisterView.tsx` M, `CustomersView.tsx` C, `EmployeesView.tsx` M, `SuppliersView.tsx` M (PO create/receive), `DistributionModuleApp.tsx` M (customers tab); i18n es+en [S3d]
+- [x] 3.7 Views: `TaxAndInvoicingView.tsx` M (server CAI, drop fake local state + hardcoded `000-001-01-00001249`), `CashRegisterView.tsx` M, `CustomersView.tsx` C, `EmployeesView.tsx` M, `SuppliersView.tsx` M (PO create/receive), `DistributionModuleApp.tsx` M (customers tab); i18n es+en [S3d]
 
 ### Pending (not part of this batch)
 
-- [ ] 3.5–3.7 Phase 3 S3c–S3d (routes; views) [S3c–S3d]
 - [ ] 4.1–4.4 Phase 4 S4 P1 (100%) [S4a–S4d]
 - [ ] 5.1–5.5 Phase 5 S5 Base Shell + Admin [S5a/S5b]
 
@@ -188,6 +187,35 @@ Role matrix (verified against `specs/distribution-access-control` + per-capabili
 - Boundary: start = S3b tip `db4e9df`; end = the `chore(sdd)` commit on `feat/distribution-complete-03-p0` (do NOT open the PR from apply)
 - Estimated review budget impact: ~620 authored lines across the 6 commits (port ~80, repo ~330, schemas ~5, routes ~180, i18n ~14, chore ~25); units stay inside the work-unit slice (repo layer ships as one behavior commit, routes split by feature)
 
+## Batch 6 (S3d) — views: tax CAI, cash close, customers, employees, suppliers, shell tab
+
+### Verification (Batch 6)
+
+| Command | Result |
+|---|---|
+| `npm run lint` | exit 0 on every commit (husky pre-commit, 6 behavior commits; the first attempt failed on `react-hooks/set-state-in-effect` and was fixed by refactoring, see deviation 1) |
+| `npm run typecheck` | exit 0 on every commit (`tsc --noEmit` clean; view files + `api.ts` write-union extension typecheck) |
+| `npm run build` | exit 0; Next.js production build after unit 6 (all routes compiled, no errors) |
+| Grep proof CAI | zero matches for `000-001-01-00001249` in `src/` — hardcoded CAI dropped; `TaxAndInvoicingView` reads server values from GET `/tax/config` (404 → null → "not configured" state) |
+| Grep proof close | `physicalCount` is the ONLY client-sent close field (`apiSend('/cash/close', 'POST', { sessionId, physicalCount })`); `closingAmount`/`expectedAmount`/`difference` appear only as server-derived display values in the closed summary banner, never in the payload |
+| Grep proof shell | `customers` in the `DistributionTab` union, navItems with `Contact` icon, render block and `CustomersView` import all present in `DistributionModuleApp.tsx` |
+| i18n parity check | 211 unique `t(...)` keys across the 6 view files — ALL resolve in BOTH `messages/es.json` and `messages/en.json` (scripted walk; first run reported false negatives due to a checker scope-path bug, fixed by splitting the `useTranslations` scope on `.`) |
+| `git status --porcelain` | clean of code changes after commit 6; only `?? openspec/changes/distribution-complete/{proposal.md, design.md, specs/}` untracked (= expected OpenSpec trail, never staged with code) |
+
+### Deviations from Design (Batch 6)
+
+1. **`react-hooks/set-state-in-effect` (content)**: the initial tax refactor failed lint because `setCaiForm(...)` ran synchronously in a `useEffect` body. Fixed with the remount-by-key pattern: `CaiConfigForm` accepts an `initial` prop, rendered as `<CaiConfigForm key={serverConfig?.id ?? 'creating'} initial={...} />`; the effect was removed entirely. Same rule kept every rewritten view free of state-in-effect.
+2. **`api.ts` write-union needs `PUT`**: `apiSend`'s method union was `'POST'|'PATCH'|'DELETE'`; the tax-config route is `PUT` (shipped S3c). Extended to `'POST'|'PATCH'|'PUT'|'DELETE'` — additive, no call-site changes.
+3. **No branch endpoint exists (content)**: PO create requires `branchId` but no branch-listing API exists. `SuppliersView` derives it from server data: first PO's `branchId`, else the open cash session's `branchId`; submit is disabled with a hint when neither exists (cannot happen while a cash session is open). Additionally, GET `/purchase-orders` returns orders WITHOUT `items` while create/receive POST responses include them → the view caches `knownItems: Record<poId, PurchaseOrderItemEntity[]>` from POST responses and falls back to an inventory picker for receive lines; the server still enforces remaining-qty with 409.
+4. **i18n scope discipline (process)**: every hardcoded Spanish string removed from the rewritten views is now keyed and added in BOTH locales, so the app renders fully in EN too (previously several views mixed `t()` with raw Spanish strings). All keys follow the existing namespace layout: `distributionModule.*` direct keys, `distributionModule.tax.*` / `distributionModule.employees.*` / `distributionModule.suppliers.*` via nested `useTranslations` scopes, and the new `customers.*` block inserted before `"inventory"`.
+5. **Commit split by view (process)**: 6 behavior commits + this chore, one view domain per commit (tax / cash / customers / employees / suppliers / shell tab), each passing husky lint+typecheck (work-unit convention from batches 4–5). i18n keys ship inside the same commit as the view using them so each unit is self-contained.
+
+### Workload / PR Boundary (Batch 6)
+
+- Current work unit: S3d views — new commits on `feat/distribution-complete-03-p0`: `533337c` tax CAI, `65717c1` cash close physicalCount, `10bf666` customers view, `3b7cc1a` employees edit/PIN/deactivate, `c6b8c8b` PO create/receive, `f5deb31` customers tab shell, + `chore(sdd)` task-marking (this batch)
+- Boundary: start = S3c chore tip `4639384`; end = the `chore(sdd)` commit on `feat/distribution-complete-03-p0` (do NOT open the PR from apply)
+- Estimated review budget impact: ~1,790 authored lines across the 7 commits (tax ~450, cash ~130, customers ~320, employees ~570, suppliers ~710, shell ~7, chore ~30 — deltas; includes i18n key blocks both locales in each view commit); units stay inside the work-unit slice (one view domain per commit)
+
 ## Status
 
-15/25 tasks complete (S1 + S2 + S3a + S3b + S3c: tasks 1.1–1.2, 2.1–2.7, 3.1–3.6; plus user-approved `POST /api/auth/pos-login`). Ready for next batch: S3d (task 3.7 views — TaxAndInvoicingView server CAI, CashRegisterView physicalCount, CustomersView tab, EmployeesView PIN/deactivate, SuppliersView PO create/receive, DistributionModuleApp customers tab; i18n es+en) on the same branch `feat/distribution-complete-03-p0`.
+16/25 tasks complete (S1 + S2 + S3a + S3b + S3c + S3d: tasks 1.1–1.2, 2.1–2.7, 3.1–3.7; plus user-approved `POST /api/auth/pos-login`). Phase 3 (P0, sale-blocking) fully closed. Ready for next batch: S4 (task 4.1–4.4 — sales payment/returns, receivables, suppliers/inventory maintenance, real dashboard trends, POS/dashboard/inventory/history views + i18n) on a new branch `feat/distribution-complete-04-p1` (base = P0 tip; do NOT open the PR from apply).
