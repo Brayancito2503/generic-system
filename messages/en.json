@@ -60,6 +60,7 @@
             "inventory": "Inventory",
             "sales": "POS Sales",
             "history": "History",
+            "customers": "Customers",
             "cash": "Cash Register",
             "suppliers": "Suppliers",
             "employees": "Employees",
