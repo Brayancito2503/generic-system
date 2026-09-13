@@ -366,6 +366,35 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     };
   }
 
+  async deleteInventoryItem(tenantId: string, itemId: string): Promise<void> {
+    const existing = await prisma.item.findFirst({
+      where: { tenantId, id: itemId },
+    });
+    if (!existing) {
+      throw new ApiError(404, 'Producto no encontrado');
+    }
+
+    // Reference guard: an item referenced by sales, purchase orders or
+    // returns is never deletable (its price/qty history must stay intact).
+    // Cash movements carry no item reference in the schema.
+    const [saleRefs, poRefs, returnRefs] = await Promise.all([
+      prisma.saleItem.count({ where: { itemId } }),
+      prisma.purchaseOrderItem.count({ where: { itemId } }),
+      prisma.saleReturnItem.count({ where: { itemId } }),
+    ]);
+    if (saleRefs + poRefs + returnRefs > 0) {
+      throw new ApiError(
+        409,
+        'No se puede eliminar el producto: tiene ventas, órdenes de compra o devoluciones registradas'
+      );
+    }
+
+    // Hard delete per inventory spec ("THEN the item is removed"); Inventory
+    // rows cascade via onDelete: Cascade. The guard above guarantees no
+    // SaleItem/POItem/ReturnItem row points at this item.
+    await prisma.item.delete({ where: { id: itemId } });
+  }
+
   // ─── Suppliers ──────────────────────────────────────────────────────────────
   async getSuppliers(tenantId: string): Promise<SupplierEntity[]> {
     const rows = await prisma.supplier.findMany({

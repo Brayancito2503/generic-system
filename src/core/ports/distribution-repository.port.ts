@@ -236,6 +236,12 @@ export interface IDistributionRepository {
     itemId: string,
     input: UpdateInventoryItemInput
   ): Promise<InventoryStockItem>;
+  /**
+   * Hard-deletes an item only when no persisted transaction references it
+   * (SaleItem / PurchaseOrderItem / SaleReturnItem); referenced items → 409,
+   * cross-tenant ids → 404. Inventory rows cascade with the Item.
+   */
+  deleteInventoryItem(tenantId: string, itemId: string): Promise<void>;
   getSuppliers(tenantId: string): Promise<SupplierEntity[]>;
   createSupplier(tenantId: string, input: CreateSupplierInput): Promise<SupplierEntity>;
   /**

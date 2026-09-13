@@ -51,3 +51,24 @@ export async function PATCH(
     return handleApiError(error);
   }
 }
+
+export async function DELETE(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
+    const tenantId = await requireTenantId();
+    if (!tenantId) throw new ApiError(401, 'No autorizado');
+
+    const { id } = await context.params;
+    if (!idParamSchema.safeParse(id).success) throw new ApiError(400, 'Datos inválidos');
+
+    // Referenced items (sales/POs/returns) → 409 in the repository; unlinked
+    // items are hard-deleted, Inventory rows cascade.
+    await repository.deleteInventoryItem(tenantId, id);
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    return handleApiError(error);
+  }
+}
