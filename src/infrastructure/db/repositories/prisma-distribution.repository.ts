@@ -29,6 +29,7 @@ import type {
   CashMovementEntity,
   CashSessionEntity,
   CustomerLight,
+  DashboardTrend,
   DistributionDashboardStats,
   EmployeeEntity,
   FiscalSummary,
@@ -74,6 +75,36 @@ function relativeTime(date: Date): string {
   return minutes > 0 ? `hace ${hours}h ${minutes}min` : `hace ${hours}h`;
 }
 
+/**
+ * Period-over-period percentage change expressed in percentage points
+ * (e.g. 12.4 means twelve point four percent increase). An empty current OR
+ * previous window returns 0 (empty state) — never NaN/Infinity, and never a
+ * divide-by-zero.
+ */
+function pctChange(current: number, previous: number): number {
+  if (current <= 0 || previous <= 0) return 0;
+  return Math.round(((current - previous) / previous) * 1000) / 10;
+}
+
+/** Trend triple (revenue / orders / avgTicket) comparing a current window against the previous one. */
+function buildTrend(
+  current: { revenue: number; orders: number },
+  previous: { revenue: number; orders: number }
+): DashboardTrend {
+  return {
+    revenue: pctChange(current.revenue, previous.revenue),
+    orders: pctChange(current.orders, previous.orders),
+    // Avg-ticket needs sales in BOTH windows; otherwise 0 (empty state).
+    avgTicket:
+      current.orders > 0 && previous.orders > 0
+        ? pctChange(
+            current.revenue / current.orders,
+            previous.revenue / previous.orders
+          )
+        : 0,
+  };
+}
+
 function firstBranchOfTenant(tenantId: string, branchId?: string) {
   if (branchId) {
     return prisma.branch.findFirst({ where: { id: branchId, tenantId } });
@@ -84,24 +115,66 @@ function firstBranchOfTenant(tenantId: string, branchId?: string) {
 export class PrismaDistributionRepository implements IDistributionRepository {
   // ─── Dashboard ─────────────────────────────────────────────────────────────
   async getDashboard(tenantId: string): Promise<DistributionDashboardStats> {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-
-    const startOfMonth = new Date(
-      startOfToday.getFullYear(),
-      startOfToday.getMonth(),
+    const now = new Date();
+    const startOfToday = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate()
+    );
+    const startOfYesterday = new Date(startOfToday);
+    startOfYesterday.setDate(startOfToday.getDate() - 1);
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfPrevMonth = new Date(
+      now.getFullYear(),
+      now.getMonth() - 1,
       1
     );
 
-    const todayAgg = await prisma.sale.aggregate({
-      where: { tenantId, createdAt: { gte: startOfToday } },
-      _sum: { total: true },
-    });
+    // Trend windows from REAL Sale rows: today / yesterday / month-to-date /
+    // previous month. Revenue and order counts drive the badges; the avg
+    // ticket and every percentage derive from these numbers (no hardcodes).
+    const [todayAgg, yesterdayAgg, monthAgg, prevMonthAgg] = await Promise.all([
+      prisma.sale.aggregate({
+        where: { tenantId, createdAt: { gte: startOfToday } },
+        _count: { _all: true },
+        _sum: { total: true },
+      }),
+      prisma.sale.aggregate({
+        where: {
+          tenantId,
+          createdAt: { gte: startOfYesterday, lt: startOfToday },
+        },
+        _count: { _all: true },
+        _sum: { total: true },
+      }),
+      prisma.sale.aggregate({
+        where: { tenantId, createdAt: { gte: startOfMonth } },
+        _count: { _all: true },
+        _sum: { total: true },
+      }),
+      prisma.sale.aggregate({
+        where: {
+          tenantId,
+          createdAt: { gte: startOfPrevMonth, lt: startOfMonth },
+        },
+        _count: { _all: true },
+        _sum: { total: true },
+      }),
+    ]);
 
-    const monthAgg = await prisma.sale.aggregate({
-      where: { tenantId, createdAt: { gte: startOfMonth } },
-      _sum: { total: true },
+    type SaleWindowAgg = typeof todayAgg;
+    const windowOf = (agg: SaleWindowAgg) => ({
+      revenue: agg._sum.total?.toNumber() ?? 0,
+      orders: agg._count._all ?? 0,
     });
+    const today = windowOf(todayAgg);
+    const yesterday = windowOf(yesterdayAgg);
+    const month = windowOf(monthAgg);
+    const prevMonth = windowOf(prevMonthAgg);
+    const trends = {
+      today: buildTrend(today, yesterday),
+      month: buildTrend(month, prevMonth),
+    };
 
     const totalProducts = await prisma.item.count({ where: { tenantId } });
 
@@ -123,25 +196,41 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       ? cashSession.openingAmount + movementsSum + (cashSession.salesTotal ?? 0)
       : 0;
 
-    const groupedTop = await prisma.saleItem.groupBy({
-      by: ['itemId'],
-      where: { sale: { tenantId } },
-      _sum: { quantity: true },
-      orderBy: { _sum: { quantity: 'desc' } },
-      take: 5,
+    // Top products: revenue = Σ SaleItem.price × quantity at SALE-TIME prices
+    // (not the current Item price), scoped to the current period (month-to-
+    // date), ranked by revenue. Decimal math stays server-side.
+    const saleItems = await prisma.saleItem.findMany({
+      where: { sale: { tenantId, createdAt: { gte: startOfMonth } } },
+      select: { itemId: true, quantity: true, price: true },
     });
+    const revenueByItem = new Map<string, number>();
+    const soldByItem = new Map<string, number>();
+    for (const si of saleItems) {
+      revenueByItem.set(
+        si.itemId,
+        (revenueByItem.get(si.itemId) ?? 0) + si.price.toNumber() * si.quantity
+      );
+      soldByItem.set(si.itemId, (soldByItem.get(si.itemId) ?? 0) + si.quantity);
+    }
+    const ranked = [...revenueByItem.entries()]
+      .map(([itemId, revenue]) => ({
+        itemId,
+        revenue,
+        sold: soldByItem.get(itemId) ?? 0,
+      }))
+      .sort((a, b) => b.revenue - a.revenue || b.sold - a.sold)
+      .slice(0, 5);
 
     const topItems = await prisma.item.findMany({
-      where: { tenantId, id: { in: groupedTop.map((g) => g.itemId) } },
+      where: { tenantId, id: { in: ranked.map((r) => r.itemId) } },
     });
 
-    const topProducts = groupedTop.map((g) => {
-      const item = topItems.find((i) => i.id === g.itemId);
-      const sold = g._sum.quantity ?? 0;
+    const topProducts = ranked.map((r) => {
+      const item = topItems.find((i) => i.id === r.itemId);
       return {
         name: item?.name ?? 'Producto eliminado',
-        sold,
-        revenue: sold * (item?.price.toNumber() ?? 0),
+        sold: r.sold,
+        revenue: Math.round(r.revenue * 100) / 100,
       };
     });
 
@@ -173,12 +262,13 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     const recentSales = await this.getRecentSales(tenantId);
 
     return {
-      salesToday: todayAgg._sum.total?.toNumber() ?? 0,
-      salesThisMonth: monthAgg._sum.total?.toNumber() ?? 0,
+      salesToday: today.revenue,
+      salesThisMonth: month.revenue,
       totalProducts,
       lowStockItems,
       cashInRegister,
       activeEmployees,
+      trends,
       topProducts,
       salesByDay,
       recentSales,
