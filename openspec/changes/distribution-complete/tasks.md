@@ -45,13 +45,13 @@ Feature-branch-chain base boundaries: PR #1 (S1) base = `feature/distribution-co
 
 ## Phase 2 — S2 Security Foundation
 
-- [ ] 2.1 Open question — SUPER_ADMIN passthrough (early): grep `requireApiAuth`/role-list consumers across `src/`; confirm none depend on strict-role denial before extending `requireApiAuth`; record finding [S2a]
-- [ ] 2.2 `package.json` M: add direct `zod ^3` dependency; install [S2a]
-- [ ] 2.3 `src/core/schemas/tenant.ts` C; `src/core/schemas/distribution.ts` C: Zod for customer/PO/employee/supplier/inventory/sale/cash-close/invoicing/settings/pagination inputs; no `any` [S2a]
-- [ ] 2.4 `src/lib/api-error.ts` C: `ApiError` + `handleApiError` → 400/401/403/404/409 ES messages [S2a]
-- [ ] 2.5 `src/lib/session.ts` M: `requireApiAuth` lets SUPER_ADMIN satisfy any roles list (blocked until 2.1 passes) [S2a]
-- [ ] 2.6 `src/app/api/auth/me/route.ts` M: add `tenant {name, modules}` payload [S2a]
-- [ ] 2.7 All 14 `src/app/api/distribution/**/route.ts` M: `requireTenantId` + `requireApiAuth(role)` + Zod + `handleApiError`; grep guard + `safeParse` per route [S2b]
+- [x] 2.1 Open question — SUPER_ADMIN passthrough (early): grep `requireApiAuth`/role-list consumers across `src/`; confirm none depend on strict-role denial before extending `requireApiAuth`; record finding [S2a]
+- [x] 2.2 `package.json` M: add direct `zod ^3` dependency; install [S2a]
+- [x] 2.3 `src/core/schemas/tenant.ts` C; `src/core/schemas/distribution.ts` C: Zod for customer/PO/employee/supplier/inventory/sale/cash-close/invoicing/settings/pagination inputs; no `any` [S2a]
+- [x] 2.4 `src/lib/api-error.ts` C: `ApiError` + `handleApiError` → 400/401/403/404/409 ES messages [S2a]
+- [x] 2.5 `src/lib/session.ts` M: `requireApiAuth` lets SUPER_ADMIN satisfy any roles list (blocked until 2.1 passes) [S2a]
+- [x] 2.6 `src/app/api/auth/me/route.ts` M: add `tenant {name, modules}` payload [S2a]
+- [x] 2.7 All 14 `src/app/api/distribution/**/route.ts` M: `requireTenantId` + `requireApiAuth(role)` + Zod + `handleApiError`; grep guard + `safeParse` per route [S2b]
 
 ## Phase 3 — S3 P0 (sale-blocking)
 
