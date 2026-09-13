@@ -178,6 +178,20 @@ export const createSaleReturnSchema = z.object({
   reason: nullableText,
 });
 
+/** List query for `GET /receivables`: tenant-scoped, paginated, optional status filter. */
+export const receivablesListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  status: z.enum(['OPEN', 'PARTIAL', 'PAID']).optional(),
+});
+
+/** Payment on a receivable: amount must be > 0 (repo enforces it against the remaining balance). */
+export const payReceivableSchema = z.object({
+  amount: z.number().finite().positive(),
+  // Credit is never a settlement method; receivables are paid CASH/CARD/TRANSFER.
+  method: z.enum(['CASH', 'CARD', 'TRANSFER']).default('CASH'),
+});
+
 // ---------------------------------------------------------------------------
 // Cash register
 // ---------------------------------------------------------------------------

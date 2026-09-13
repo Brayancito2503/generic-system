@@ -22,6 +22,7 @@ import type {
   ReceivePurchaseOrderInput,
   RegisterSaleInput,
   CreateSaleReturnInput,
+  PayReceivableInput,
 } from '@/core/ports/distribution-repository.port';
 import type {
   CashMovementEntity,
@@ -35,6 +36,8 @@ import type {
   PaginatedResult,
   PaymentMethod,
   PurchaseOrderEntity,
+  ReceivableEntity,
+  ReceivableStatus,
   RecentSale,
   SaleEntity,
   SaleReturnEntity,
@@ -1848,5 +1851,129 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         })),
       };
     });
+  }
+
+  // ─── P1: Receivables (credit tracking + payments) ──────────────────────────
+  async getReceivables(
+    tenantId: string,
+    page = 1,
+    limit = 20,
+    status?: ReceivableStatus
+  ): Promise<PaginatedResult<ReceivableEntity>> {
+    const where: Prisma.ReceivableWhereInput = {
+      tenantId,
+      ...(status ? { status } : {}),
+    };
+    const skip = (page - 1) * limit;
+
+    const [rows, total] = await Promise.all([
+      prisma.receivable.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          person: { select: { firstName: true, lastName: true } },
+          payments: { orderBy: { createdAt: 'desc' } },
+        },
+      }),
+      prisma.receivable.count({ where }),
+    ]);
+
+    return {
+      items: rows.map((r) => ({
+        id: r.id,
+        tenantId: r.tenantId,
+        saleId: r.saleId,
+        personId: r.personId,
+        customerName: r.person
+          ? `${r.person.firstName} ${r.person.lastName}`
+          : null,
+        originalAmount: r.originalAmount.toNumber(),
+        balance: r.balance.toNumber(),
+        status: r.status as ReceivableStatus,
+        createdAt: r.createdAt,
+        payments: r.payments.map((p) => ({
+          id: p.id,
+          tenantId: p.tenantId,
+          receivableId: p.receivableId,
+          amount: p.amount.toNumber(),
+          method: p.method as PaymentMethod,
+          createdAt: p.createdAt,
+        })),
+      })),
+      page,
+      limit,
+      hasMore: page * limit < total,
+    };
+  }
+
+  async payReceivable(
+    tenantId: string,
+    receivableId: string,
+    input: PayReceivableInput
+  ): Promise<ReceivableEntity> {
+    const result = await prisma.$transaction(async (tx) => {
+      const receivable = await tx.receivable.findFirst({
+        where: { tenantId, id: receivableId },
+      });
+      if (!receivable) {
+        throw new ApiError(404, 'Cuenta por cobrar no encontrada');
+      }
+      if (input.amount <= 0) {
+        throw new ApiError(400, 'El monto del pago debe ser positivo');
+      }
+      // Overpay guard: a payment can never exceed the remaining balance → 409.
+      if (input.amount > receivable.balance.toNumber()) {
+        throw new ApiError(
+          409,
+          'El pago supera el saldo pendiente de la cuenta por cobrar'
+        );
+      }
+
+      const newBalance =
+        Math.round((receivable.balance.toNumber() - input.amount) * 100) / 100;
+      const status = newBalance <= 0 ? 'PAID' : 'PARTIAL';
+
+      await tx.receivablePayment.create({
+        data: {
+          tenantId,
+          receivableId,
+          amount: input.amount,
+          method: input.method,
+        },
+      });
+
+      return tx.receivable.update({
+        where: { id: receivableId },
+        data: { balance: newBalance, status },
+        include: {
+          person: { select: { firstName: true, lastName: true } },
+          payments: { orderBy: { createdAt: 'desc' } },
+        },
+      });
+    });
+
+    return {
+      id: result.id,
+      tenantId: result.tenantId,
+      saleId: result.saleId,
+      personId: result.personId,
+      customerName: result.person
+        ? `${result.person.firstName} ${result.person.lastName}`
+        : null,
+      originalAmount: result.originalAmount.toNumber(),
+      balance: result.balance.toNumber(),
+      status: result.status as ReceivableStatus,
+      createdAt: result.createdAt,
+      payments: result.payments.map((p) => ({
+        id: p.id,
+        tenantId: p.tenantId,
+        receivableId: p.receivableId,
+        amount: p.amount.toNumber(),
+        method: p.method as PaymentMethod,
+        createdAt: p.createdAt,
+      })),
+    };
   }
 }

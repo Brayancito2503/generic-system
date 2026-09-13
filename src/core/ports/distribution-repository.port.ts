@@ -13,6 +13,8 @@ import type {
   PaginatedResult,
   PaymentMethod,
   PurchaseOrderEntity,
+  ReceivableEntity,
+  ReceivableStatus,
   SaleEntity,
   SaleReturnEntity,
   SupplierEntity,
@@ -196,6 +198,11 @@ export interface CreateSaleReturnInput {
   reason?: string | null;
 }
 
+export interface PayReceivableInput {
+  amount: number;
+  method: PaymentMethod;
+}
+
 export interface IDistributionRepository {
   getDashboard(tenantId: string): Promise<DistributionDashboardStats>;
   getInventory(tenantId: string): Promise<InventoryStockItem[]>;
@@ -299,4 +306,25 @@ export interface IDistributionRepository {
     saleId: string,
     input: CreateSaleReturnInput
   ): Promise<SaleReturnEntity>;
+  /**
+   * Paginated, tenant-scoped receivables list; optional OPEN/PARTIAL/PAID
+   * status filter. Same page/limit contract as `getSales`.
+   */
+  getReceivables(
+    tenantId: string,
+    page?: number,
+    limit?: number,
+    status?: ReceivableStatus
+  ): Promise<PaginatedResult<ReceivableEntity>>;
+  /**
+   * Applies a payment to a receivable: amount must be > 0 and ≤ the remaining
+   * balance (overpay → 409). Creates the ReceivablePayment, reduces the
+   * balance, and marks the receivable PARTIAL while a balance remains, PAID
+   * when it reaches zero. One transaction.
+   */
+  payReceivable(
+    tenantId: string,
+    receivableId: string,
+    input: PayReceivableInput
+  ): Promise<ReceivableEntity>;
 }
