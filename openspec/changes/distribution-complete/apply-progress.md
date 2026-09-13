@@ -95,7 +95,9 @@ Role matrix (verified against `specs/distribution-access-control` + per-capabili
 ### Pending (not part of this batch)
 
 - [x] 4.1 Phase 4 S4a — sales pagination, audited returns, receivables list + payments (batch 7)
-- [ ] 4.2–4.4 Phase 4 S4 P1 (100%) [S4b–S4d]
+- [x] 4.2 Phase 4 S4b — suppliers PATCH/deactivate + inventory branch-scoped update + referenced-delete 409 (batch 8)
+- [x] 4.3 Phase 4 S4c — dashboard real trends + topProducts, pagination verification (batch 9)
+- [ ] 4.4 Phase 4 S4d — views x4, i18n [S4d]
 - [ ] 5.1–5.5 Phase 5 S5 Base Shell + Admin [S5a/S5b]
 
 ## Verification Evidence (branch `feat/distribution-complete-03-p0`, post-edits)
@@ -282,6 +284,43 @@ Role matrix (verified against `specs/distribution-access-control` + per-capabili
 - Boundary: start = S4a tip `2a64e1a`; end = the `chore(sdd)` commit on `feat/distribution-complete-04-p1` (do NOT open the PR from apply)
 - Estimated review budget impact: ~210 changed lines across the 4 commits (commit stats: +117/−2, +53/−13, +56, +chore); units stay inside the work-unit slice (one behavior per commit)
 
+## Batch 9 (S4c) — dashboard real trends + topProducts + pagination verification (task 4.3, PR #4)
+
+### Work Unit Evidence — S4c (task 4.3)
+
+| Evidence | Required value |
+|---|---|
+| Focused test command and exact result | `npm run lint` → exit 0 (eslint clean, 0 errors 0 warnings; husky pre-commit + typecheck ran on the code commit); `npm run typecheck` → exit 0 (`tsc --noEmit` clean — entity + repo with `DashboardTrend`/`trends` contract compile); `npm run build` → exit 0 (Next.js 16.3.4 production build; 28 app routes incl. `/api/distribution/dashboard` `ƒ`) |
+| Runtime harness command/scenario and exact result | N/A as runtime: no DB-backed smoke was authorized for S4c (empty-period 0%-trend + real-badge smoke is the S5 gate per design Testing Strategy, under user supervision with DB backup). Behavior proven via grep guards (zero hardcoded percent literals in backend, Σ SaleItem.price·qty, empty-period guard, pagination 1..100/out-of-range contract) + production build compile |
+| Rollback boundary | Revert the 1 code commit of batch 9 independently: `feat(distribution)` dashboard (`src/core/entities/distribution.ts` + `src/infrastructure/db/repositories/prisma-distribution.repository.ts` getDashboard). The chore commit (`tasks.md`, `apply-progress.md`) reverts separately; the code commit sits on top of S4b tip and reverts without touching S3/S4a/S4b files. Route file untouched (already contract-compliant — see deviation 1) |
+
+### Verification (Batch 9)
+
+| Command | Result |
+|---|---|
+| `npm run lint` | exit 0 (eslint clean, 0 errors 0 warnings) |
+| `npm run typecheck` | exit 0 (`tsc --noEmit` clean; `type SaleWindowAgg = typeof todayAgg` derives the Decimal aggregate type without importing Prisma runtime types) |
+| `npm run build` | exit 0; Next.js 16.3.4 production build; `/api/distribution/dashboard` compiled `ƒ` |
+| Grep proof zero hardcodes | `\+12\.4|12\.4%|\+8\.1` → ZERO matches in `src/app/api/distribution/dashboard/route.ts` + `prisma-distribution.repository.ts` (the doc comments were reworded to keep the proof literal-free); the only remaining matches in all of `src/` are `DistributionDashboard.tsx:176` `trend="+12.4%"` and `:185` `trend="+8.1%"` — the VIEW, task 4.4 (S4d), out of this batch |
+| Grep proof topProducts | repo `:210` `(revenueByItem.get(si.itemId) ?? 0) + si.price.toNumber() * si.quantity` (Σ SaleItem price × qty at SALE-TIME price); `:212` `soldByItem.set(...) + si.quantity`; `:220` `.sort((a, b) => b.revenue - a.revenue || b.sold - a.sold)` (revenue-ranked); `:199` `where: { sale: { tenantId, createdAt: { gte: startOfMonth } } }` (tenant-scoped, current period) |
+| Grep proof empty-period guard | repo `:84` `if (current <= 0 || previous <= 0) return 0;` (empty current OR previous window → 0, never NaN/Inf/divide-by-zero); `:98` `current.orders > 0 && previous.orders > 0` (avgTicket needs both windows) |
+| Grep proof pagination contract | schemas `distribution.ts:176` + `:198` `limit: z.coerce.number().int().min(1).max(100).default(20)` (invalid limit → `safeParse` fails → `ApiError(400)` in `sales/route.ts:15` / `receivables/route.ts:15`); repo `prisma-distribution.repository.ts:1871` + `:2091` `hasMore: page * limit < total` (out-of-range page → empty `items` + `hasMore: false`); entity `distribution.ts:266-267` `PaginatedResult<T> { items: T[]; ... }` — S4a contract verified intact, no change needed (verify-only this batch; the only route in batch = dashboard, not a list route) |
+| `git status --porcelain` | clean of code changes after the `chore(sdd)` commit; only `?? openspec/changes/distribution-complete/{proposal.md, design.md, specs/}` untracked (= expected OpenSpec trail, never staged with code) |
+
+### Deviations from Design (Batch 9)
+
+1. **Dashboard route file unchanged (content, already contract-compliant)**: task 4.3 lists `dashboard/route.ts` M, but the route already runs `requireApiAuth(['STAFF','TENANT_ADMIN'])` + `requireTenantId` + `noQueryParamsSchema.safeParse` (any query param → 400) + `handleApiError` and delegates to `repository.getDashboard` — exactly the S2-route pattern and the design's "GET /dashboard → aggregate sales". All dashboard work landed in the repo (`getDashboard`) + entity (`DashboardTrend`); the route needed zero changes. The dashboard endpoint takes no period query param (design keeps it param-less; the view's hoy/semana/mes tabs are dead UI until S4d).
+2. **`trends` shape (design-level detail, spec-faithful)**: the spec requires "trend percentages derive from the queried data" and "revenue, orders, avg ticket" per task 4.3, without naming a JSON shape. Chosen: `trends: { today: DashboardTrend, month: DashboardTrend }` where `DashboardTrend = { revenue, orders, avgTicket }` in percentage points. `today` = today vs yesterday; `month` = month-to-date vs previous calendar month. Both badges in the current view (salesToday, salesThisMonth) get real data, every named metric is present, and S4d renders from `stats.trends.*`.
+3. **Empty-period guard is both-sided (content, spec literal)**: spec scenario "a period with zero sales → 0%/empty state". Guard returns 0 when EITHER window is empty (`current <= 0 || previous <= 0`), so an empty current period renders the empty state (not a noisy -100%) and an empty previous period cannot divide by zero. avgTicket additionally requires both windows to have orders.
+4. **topProducts scoped to month-to-date + revenue-ranked (content)**: spec: "GIVEN products sold at historical prices → revenue reflects sale-time prices". The old ranking grouped by `_sum.quantity` and multiplied by the CURRENT `item.price` — wrong when prices moved. Now `Σ SaleItem.price × quantity` grouped per item for the current period (matches the UI card subtitle "Por ventas del mes"), sorted by revenue desc (tie-break sold desc); the old groupBy query is gone. `'Producto eliminado'` label kept for items deleted after sale.
+5. **Pagination verify-only (process)**: task 4.3 says "verify/extend" — the S4a contract (`paginationSchema` page≥1 / limit 1..100 → 400; repo `hasMore: page * limit < total`) already honors both scenarios and no list route is new in this batch, so nothing was extended. Documented as verified with line-ref greps; no second commit (no empty commits).
+
+### Workload / PR Boundary (Batch 9)
+
+- Current work unit: S4c — new commits on `feat/distribution-complete-04-p1`: `82095eb` dashboard real trends + topProducts, + `chore(sdd)` task-marking (this batch)
+- Boundary: start = S4b tip `9124325`; end = the `chore(sdd)` commit on `feat/distribution-complete-04-p1` (do NOT open the PR from apply)
+- Estimated review budget impact: ~145 changed lines across the 2 commits (commit stats: +137/−27, +chore); one behavior commit inside the work-unit slice
+
 ## Status
 
-18/25 tasks complete (S1 + S2 + S3a + S3b + S3c + S3d + S4a + S4b: tasks 1.1–1.2, 2.1–2.7, 3.1–3.7, 4.1, 4.2; plus user-approved `POST /api/auth/pos-login`). Phase 3 (P0, sale-blocking) fully closed; Phase 4 S4a + S4b closed. Ready for next batch: S4c (task 4.3 — dashboard real trends + pagination) on the same branch `feat/distribution-complete-04-p1` (base = S4b tip; do NOT open the PR from apply).
+19/25 tasks complete (S1 + S2 + S3a + S3b + S3c + S3d + S4a + S4b + S4c: tasks 1.1–1.2, 2.1–2.7, 3.1–3.7, 4.1, 4.2, 4.3; plus user-approved `POST /api/auth/pos-login`). Phase 3 (P0, sale-blocking) fully closed; Phase 4 S4a–S4c closed. Ready for next batch: S4d (task 4.4 — views ×4: `SalesPOSView` tender/credit, `DistributionDashboard` real fields, `InventoryView` multi-branch/delete, `SalesHistoryView` pagination; i18n) on the same branch `feat/distribution-complete-04-p1` (base = S4c tip; do NOT open the PR from apply).

@@ -67,7 +67,7 @@ Feature-branch-chain base boundaries: PR #1 (S1) base = `feature/distribution-co
 
 - [x] 4.1 Routes+repo: `sales/route.ts` M (paymentMethod/paidAmount server-side + pagination); `sales/[id]/returns/route.ts` C POST (409 over-qty, stock restore, audit); `receivables/route.ts` C GET; `receivables/[id]/pay/route.ts` C POST [S4a]
 - [x] 4.2 Routes: `suppliers/route.ts` M PATCH; `suppliers/[id]/route.ts` C PATCH/deactivate; `inventory/route.ts` M branchId-scoped update + negative-value guards; `inventory/[id]/route.ts` M DELETE (409 if referenced) [S4b]
-- [ ] 4.3 `dashboard/route.ts` + repo M: real trends period-over-period (drop `+12.4%` hardcodes), topProducts = Σ SaleItem.price·qty; pagination limit 1..100 → invalid 400, out-of-range → empty [S4c]
+- [x] 4.3 `dashboard/route.ts` + repo M: real trends period-over-period (drop `+12.4%` hardcodes), topProducts = Σ SaleItem.price·qty; pagination limit 1..100 → invalid 400, out-of-range → empty [S4c]
 - [ ] 4.4 Views: `SalesPOSView.tsx` M (tender/credit), `DistributionDashboard.tsx` M (drop hardcodes), `InventoryView.tsx` M (multi-branch/delete), `SalesHistoryView.tsx` M (pagination); i18n [S4d]
 
 ## Phase 5 — S5 Base Shell + Admin
