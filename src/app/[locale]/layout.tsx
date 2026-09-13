@@ -1,5 +1,5 @@
 import "./globals.css";
-import { Providers } from "@/app/[locale]/providers";
+import { IntlErrorHandlingProvider, Providers } from "@/app/[locale]/providers";
 import { hasLocale, NextIntlClientProvider } from "next-intl";
 import { notFound } from "next/navigation";
 import { routing } from "@/i18n/routing";
@@ -36,7 +36,9 @@ export default async function RootLayout({
                         </div> */}
                         {/* {children} */}
                         <TooltipProvider delayDuration={200}>
-                            {children}
+                            <IntlErrorHandlingProvider>
+                                {children}
+                            </IntlErrorHandlingProvider>
                         </TooltipProvider>
                     </Providers>
                 </NextIntlClientProvider>

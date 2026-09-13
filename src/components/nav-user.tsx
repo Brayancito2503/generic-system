@@ -36,7 +36,7 @@ export function NavUser() {
 
   useEffect(() => {
     getMe().then((me) => {
-      if (me) setUser({ name: me.name, email: me.email })
+      if (me) setUser({ name: me.user.name, email: me.user.email })
     })
   }, [])
 

@@ -23,6 +23,7 @@ import { CustomersView } from "./CustomersView";
 import SuppliersView from "./SuppliersView";
 import EmployeesView from "./EmployeesView";
 import TaxAndInvoicingView from "./TaxAndInvoicingView";
+import { getMe } from "@/features/auth/api";
 
 export type DistributionTab =
     | "dashboard"
@@ -37,7 +38,18 @@ export type DistributionTab =
 
 export default function DistributionModuleApp() {
     const [activeTab, setActiveTab] = useState<DistributionTab>("dashboard");
+    const [tenantName, setTenantName] = useState<string | null>(null);
     const t = useTranslations("distributionModule");
+
+    // The header reflects the real tenant name from the session, never a
+    // hardcoded demo label.
+    React.useEffect(() => {
+        let active = true;
+        getMe().then((me) => {
+            if (active) setTenantName(me?.tenant?.name ?? null);
+        });
+        return () => { active = false; };
+    }, []);
 
     const navItems: { id: DistributionTab; icon: React.ElementType }[] = [
         { id: "dashboard", icon: LayoutDashboard },
@@ -61,13 +73,13 @@ export default function DistributionModuleApp() {
                     </div>
                     <div>
                         <h2 className="text-sm font-bold flex items-center gap-2 text-foreground">
-                            {t("header.title")}
+                            {tenantName || t("header.title")}
                             <span className="px-2 py-0.5 text-[10px] uppercase font-bold tracking-wider rounded bg-primary/10 text-primary border border-primary/20">
                                 {t("header.moduleBadge")}
                             </span>
                         </h2>
                         <p className="text-xs text-muted-foreground">
-                            {t("header.branchInfo")}
+                            {t("header.moduleDescription")}
                         </p>
                     </div>
                 </div>

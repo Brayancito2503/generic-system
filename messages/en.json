@@ -33,15 +33,22 @@
         "title": "Welcome back"
     },
     "sidebar": {
+        "admin": "Administration",
         "dashboard": "Dashboard",
         "distribution": "Distribution",
         "gym": "Gymnasium (GYM)",
+        "groupLabel": "Main Modules",
         "language": {
             "default": "Language",
             "en": "English",
             "es": "Spanish"
         },
         "logOut": "Log out",
+        "plan": {
+            "distribution": "Distribution",
+            "generic": "Generic",
+            "gym": "Gymnasium"
+        },
         "theme": {
             "dark": "Dark",
             "light": "Light",
@@ -51,9 +58,9 @@
     },
     "distributionModule": {
         "header": {
-            "title": "Distribuidora San José",
+            "title": "Distribution",
             "moduleBadge": "Distribution Module",
-            "branchInfo": "Central Branch Managua • Tenant: distribuidora-sanjose"
+            "moduleDescription": "Sales, inventory and invoicing management"
         },
         "tabs": {
             "dashboard": "Dashboard",

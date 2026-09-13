@@ -33,15 +33,22 @@
         "title": "Bienvenido de nuevo"
     },
     "sidebar": {
+        "admin": "Administración",
         "dashboard": "Dashboard General",
         "distribution": "Distribuidora",
         "gym": "Gimnasio (GYM)",
+        "groupLabel": "Módulos Principales",
         "language": {
             "default": "Idioma",
             "en": "Inglés",
             "es": "Español"
         },
         "logOut": "Cerrar sesión",
+        "plan": {
+            "distribution": "Distribución",
+            "generic": "Genérico",
+            "gym": "Gimnasio"
+        },
         "theme": {
             "dark": "Oscuro",
             "light": "Claro",
@@ -51,9 +58,9 @@
     },
     "distributionModule": {
         "header": {
-            "title": "Distribuidora San José",
+            "title": "Distribuidora",
             "moduleBadge": "Módulo Distribución",
-            "branchInfo": "Sucursal Central Managua • Tenant: distribuidora-sanjose"
+            "moduleDescription": "Gestión comercial, inventario y facturación"
         },
         "tabs": {
             "dashboard": "Dashboard",

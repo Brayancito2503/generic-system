@@ -6,6 +6,18 @@ interface PublicUser {
   email: string;
 }
 
+/** Tenant shell payload from /api/auth/me: display name + enabled modules. */
+export interface MeTenant {
+  name: string;
+  modules: string[];
+}
+
+/** Full /api/auth/me response: the authenticated user plus its tenant shell. */
+export interface MePayload {
+  user: PublicUser;
+  tenant: MeTenant;
+}
+
 type LoginPayload =
   | { mode: 'admin'; email: string; password: string }
   | { mode: 'pos'; pin: string };
@@ -32,9 +44,9 @@ export async function logout(): Promise<void> {
   await post('/api/auth/logout');
 }
 
-export async function getMe(): Promise<PublicUser | null> {
+export async function getMe(): Promise<MePayload | null> {
   const res = await fetch('/api/auth/me');
   if (!res.ok) return null;
-  const data = (await res.json()) as { user: PublicUser };
-  return data.user;
+  const data = (await res.json()) as MePayload;
+  return data;
 }
