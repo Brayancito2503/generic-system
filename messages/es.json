@@ -6,7 +6,13 @@
         "conflict": "Conflicto con el estado actual del recurso",
         "badRequest": "Solicitud inválida",
         "validation": "Datos inválidos",
-        "internal": "Error interno del servidor"
+        "internal": "Error interno del servidor",
+        "posLogin": {
+            "tenantRequired": "Tenant es requerido",
+            "pinRequired": "El PIN es requerido",
+            "invalidPin": "PIN incorrecto",
+            "loginError": "Error al iniciar sesión"
+        }
     },
     "homePage": {
         "description": "Motor SaaS multi-tenant de marca blanca para gestionar tu negocio.",

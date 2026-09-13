@@ -6,7 +6,13 @@
         "conflict": "Conflict with the current state of the resource",
         "badRequest": "Invalid request",
         "validation": "Invalid data",
-        "internal": "Internal server error"
+        "internal": "Internal server error",
+        "posLogin": {
+            "tenantRequired": "Tenant is required",
+            "pinRequired": "PIN is required",
+            "invalidPin": "Incorrect PIN",
+            "loginError": "Error logging in"
+        }
     },
     "homePage": {
         "description": "White-label multi-tenant SaaS engine to run your business.",
