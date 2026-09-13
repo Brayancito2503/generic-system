@@ -72,8 +72,8 @@ Feature-branch-chain base boundaries: PR #1 (S1) base = `feature/distribution-co
 
 ## Phase 5 — S5 Base Shell + Admin
 
-- [ ] 5.1 `app-sidebar.tsx` M: session + `tenant.modules` + role-driven nav; real tenant name in team switcher; customers tab; hide inactive modules [S5a]
-- [ ] 5.2 `src/app/api/distribution/settings/route.ts` C GET/PUT TENANT_ADMIN + Zod → `Tenant.settings`; `TenantSettingsView.tsx` C; i18n [S5a]
-- [ ] 5.3 `dashboard/modules/gym/page.tsx` M + `GymCheckInView.tsx` M: drop `tenantId="powerfit-gym"` hardcode + default param; tenantId from session (`/api/auth/me`) [S5b]
-- [ ] 5.4 `messages/es.json` + `messages/en.json` M: every new UI string in both locales (customers, CAI, payments/returns, settings, pagination, physical-count keys) [S5b]
-- [ ] 5.5 Final seeded smoke: backup → `db:seed` → login admin/PIN → first sale `INV-…-000017`; dup-open 409; STAFF tax/config + settings 403; malformed 400; over-receive/over-return 409; branch-B stock untouched; return restores stock; CAI persists reload; en renders [S5]
+- [x] 5.1 `app-sidebar.tsx` M: session + `tenant.modules` + role-driven nav; real tenant name in team switcher; customers tab; hide inactive modules [S5a]
+- [x] 5.2 `src/app/api/distribution/settings/route.ts` C GET/PUT TENANT_ADMIN + Zod → `Tenant.settings`; `TenantSettingsView.tsx` C; i18n [S5a]
+- [x] 5.3 `dashboard/modules/gym/page.tsx` M + `GymCheckInView.tsx` M: drop `tenantId="powerfit-gym"` hardcode + default param; tenantId from session (`/api/auth/me`) [S5b]
+- [x] 5.4 `messages/es.json` + `messages/en.json` M: every new UI string in both locales (customers, CAI, payments/returns, settings, pagination, physical-count keys) [S5b]
+- [x] 5.5 Final seeded smoke: backup → `db:seed` → login admin/PIN → first sale `INV-…-000017`; dup-open 409; STAFF tax/config + settings 403; malformed 400; over-receive/over-return 409; branch-B stock untouched; return restores stock; CAI persists reload; en renders [S5]
