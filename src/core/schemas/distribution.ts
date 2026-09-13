@@ -6,7 +6,6 @@ import { z } from 'zod';
 import { hasAnyDefinedField } from './tenant';
 
 const idString = z.string().trim().min(1).max(60);
-const optionalText = z.string().trim().max(500).optional();
 const nullableText = z.string().trim().max(500).nullish();
 const nonNegativeNumber = z.number().finite().nonnegative();
 

@@ -42,7 +42,7 @@ export async function requireApiAuth(roles?: SessionRole[]): Promise<SessionPayl
   if (!session) {
     throw new UnauthorizedError();
   }
-  if (roles && !roles.includes(session.role)) {
+  if (roles && session.role !== 'SUPER_ADMIN' && !roles.includes(session.role)) {
     throw new ForbiddenError();
   }
   return session;
