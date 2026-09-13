@@ -34,13 +34,15 @@ export async function POST(request: NextRequest) {
     const parsed = registerSaleSchema.safeParse(body);
     if (!parsed.success) throw new ApiError(400, 'Datos inválidos');
 
-    // paymentMethod/paidAmount/balance are validated here; the repository
-    // contract and server-side money math land in P1.
+    // paymentMethod/paidAmount flow through the port; server-side money math
+    // and receivable creation land in P1.
     const sale = await repository.registerSale(tenantId, {
       lines: parsed.data.lines,
       discount: parsed.data.discount,
       personId: parsed.data.personId ?? null,
       notes: parsed.data.notes ?? null,
+      paymentMethod: parsed.data.paymentMethod,
+      paidAmount: parsed.data.paidAmount,
     });
 
     return NextResponse.json(sale, { status: 201 });

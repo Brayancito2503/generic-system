@@ -20,6 +20,7 @@ import type {
   EmployeeEntity,
   FiscalSummary,
   InventoryStockItem,
+  PaymentMethod,
   PurchaseOrderEntity,
   RecentSale,
   SaleEntity,
@@ -617,9 +618,11 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       data: {
         status: 'CLOSED',
         closedAt: new Date(),
-        closingAmount: input.closingAmount,
-        expectedAmount: input.expectedAmount,
-        difference: input.difference,
+        // P0 contract: only the physical count is client input. Expected/difference
+        // derivation from movements + sales lands with the full server-side close (S3b).
+        closingAmount: input.physicalCount,
+        expectedAmount: input.physicalCount,
+        difference: 0,
       },
     });
 
@@ -980,6 +983,12 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       taxAmount: saleResult.taxAmount.toNumber(),
       discount: saleResult.discount.toNumber(),
       total: saleResult.total.toNumber(),
+      paymentMethod: input.paymentMethod,
+      paidAmount: input.paidAmount ?? saleResult.total.toNumber(),
+      balance: Math.max(
+        0,
+        saleResult.total.toNumber() - (input.paidAmount ?? saleResult.total.toNumber())
+      ),
       invoiceNumber: saleResult.invoiceNumber,
       status: saleResult.status,
       createdAt: saleResult.createdAt,
@@ -1016,6 +1025,9 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       taxAmount: s.taxAmount.toNumber(),
       discount: s.discount.toNumber(),
       total: s.total.toNumber(),
+      paymentMethod: s.paymentMethod as PaymentMethod,
+      paidAmount: s.paidAmount.toNumber(),
+      balance: s.balance.toNumber(),
       invoiceNumber: s.invoiceNumber,
       status: s.status,
       createdAt: s.createdAt,

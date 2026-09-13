@@ -1,5 +1,11 @@
 // Distribution vertical — Domain entities (Core, agnóstico a infraestructura)
 
+/** Payment methods accepted by the POS and receivable payments. */
+export type PaymentMethod = 'CASH' | 'CARD' | 'TRANSFER' | 'CREDIT';
+
+/** Lifecycle of a credit-sale receivable. */
+export type ReceivableStatus = 'OPEN' | 'PARTIAL' | 'PAID';
+
 export interface SupplierEntity {
   id: string;
   tenantId: string;
@@ -19,6 +25,8 @@ export interface PurchaseOrderItemEntity {
   itemId: string;
   itemName: string;
   quantity: number;
+  /** Units already received; remaining = quantity - receivedQty. */
+  receivedQty: number;
   cost: number;
 }
 
@@ -100,6 +108,19 @@ export interface TaxRateEntity {
   isDefault: boolean;
 }
 
+export interface InvoicingConfigEntity {
+  id: string;
+  tenantId: string;
+  caiNumber: string;
+  rangeFrom: string;
+  rangeTo: string;
+  limitDate?: Date | string | null;
+  companyTaxId: string;
+  legalName: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface SaleLineEntity {
   id: string;
   itemId: string;
@@ -118,11 +139,57 @@ export interface SaleEntity {
   taxAmount: number;
   discount: number;
   total: number;
+  paymentMethod: PaymentMethod;
+  paidAmount: number;
+  balance: number;
   invoiceNumber?: string | null;
   status: string;
   notes?: string | null;
   createdAt: Date;
   items: SaleLineEntity[];
+}
+
+export interface ReceivablePaymentEntity {
+  id: string;
+  tenantId: string;
+  receivableId: string;
+  amount: number;
+  method: PaymentMethod;
+  createdAt: Date;
+}
+
+export interface ReceivableEntity {
+  id: string;
+  tenantId: string;
+  saleId: string;
+  personId: string;
+  customerName?: string | null;
+  originalAmount: number;
+  balance: number;
+  status: ReceivableStatus;
+  createdAt: Date;
+  payments?: ReceivablePaymentEntity[];
+}
+
+export interface SaleReturnItemEntity {
+  id: string;
+  returnId: string;
+  itemId: string;
+  itemName: string;
+  quantity: number;
+  refundAmount: number;
+}
+
+export interface SaleReturnEntity {
+  id: string;
+  tenantId: string;
+  saleId: string;
+  saleNumber?: string | null;
+  cashSessionId?: string | null;
+  reason?: string | null;
+  totalRefund: number;
+  createdAt: Date;
+  items: SaleReturnItemEntity[];
 }
 
 export interface CustomerLight {
@@ -173,4 +240,12 @@ export interface FiscalSummary {
   taxedRevenue: number;
   taxCollected: number;
   profit: number;
+}
+
+/** Generic pagination envelope for tenant-scoped list endpoints. */
+export interface PaginatedResult<T> {
+  items: T[];
+  page: number;
+  limit: number;
+  hasMore: boolean;
 }

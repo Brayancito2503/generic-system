@@ -34,9 +34,7 @@ export async function POST(request: NextRequest) {
     // never controls them here (only the physical count is trusted).
     const session = await repository.closeCashSession(tenantId, {
       sessionId: closeInput.sessionId,
-      closingAmount: closeInput.physicalCount,
-      expectedAmount: closeInput.physicalCount,
-      difference: 0,
+      physicalCount: closeInput.physicalCount,
     });
 
     return NextResponse.json(session);

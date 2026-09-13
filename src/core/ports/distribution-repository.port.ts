@@ -9,6 +9,7 @@ import type {
   EmployeeEntity,
   FiscalSummary,
   InventoryStockItem,
+  PaymentMethod,
   PurchaseOrderEntity,
   SaleEntity,
   SupplierEntity,
@@ -72,9 +73,82 @@ export interface AddCashMovementInput {
 
 export interface CloseCashSessionInput {
   sessionId: string;
-  closingAmount: number;
-  expectedAmount: number;
-  difference: number;
+  /**
+   * Only the physical count is client input; expectedAmount/difference are
+   * computed server-side from movements and sales (never trusted from client).
+   */
+  physicalCount: number;
+}
+
+// ─── P0 contracts: customers ────────────────────────────────────────────────
+
+export interface CreateCustomerInput {
+  firstName: string;
+  lastName: string;
+  email?: string | null;
+  phone?: string | null;
+  documentId?: string | null;
+}
+
+export interface UpdateCustomerInput {
+  firstName?: string;
+  lastName?: string;
+  email?: string | null;
+  phone?: string | null;
+  documentId?: string | null;
+}
+
+// ─── P0 contracts: purchase orders (create + receive) ───────────────────────
+
+export interface PurchaseOrderLineInput {
+  itemId: string;
+  quantity: number;
+}
+
+export interface CreatePurchaseOrderInput {
+  supplierId: string;
+  branchId: string;
+  items: PurchaseOrderLineInput[];
+  notes?: string | null;
+  expectedDate?: Date;
+}
+
+export interface ReceivePurchaseOrderLineInput {
+  itemId: string;
+  quantity: number;
+}
+
+export interface ReceivePurchaseOrderInput {
+  receivedItems: ReceivePurchaseOrderLineInput[];
+}
+
+// ─── P0 contracts: employees (update / deactivate / POS PIN link) ───────────
+
+export interface UpdateEmployeeInput {
+  firstName?: string;
+  lastName?: string;
+  email?: string | null;
+  phone?: string | null;
+  branchId?: string | null;
+  role?: string;
+  department?: string | null;
+  salary?: number | null;
+  commissionRate?: number | null;
+  hireDate?: Date;
+  isActive?: boolean;
+  /** POS PIN (4-6 digits); hashed server-side when linking the User. */
+  pin?: string;
+}
+
+// ─── P0 contracts: invoicing / CAI config ───────────────────────────────────
+
+export interface UpdateInvoicingConfigInput {
+  caiNumber?: string;
+  rangeFrom?: string;
+  rangeTo?: string;
+  limitDate?: Date | null;
+  companyTaxId?: string;
+  legalName?: string;
 }
 
 export interface CreateTaxRateInput {
@@ -102,6 +176,9 @@ export interface RegisterSaleInput {
   discount: number;
   personId?: string | null;
   notes?: string | null;
+  paymentMethod: PaymentMethod;
+  /** Amount tendered/paid at sale time; balance = total - paidAmount (server-side). */
+  paidAmount?: number;
 }
 
 export interface IDistributionRepository {
