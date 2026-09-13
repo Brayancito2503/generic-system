@@ -664,10 +664,19 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     tenantId: string,
     input: OpenCashSessionInput
   ): Promise<CashSessionEntity> {
+    // Single open-session guard: a second OPEN session for the tenant is a
+    // conflict (409); the routes surface this code as-is.
+    const alreadyOpen = await prisma.cashSession.findFirst({
+      where: { tenantId, status: 'OPEN' },
+    });
+    if (alreadyOpen) {
+      throw new ApiError(409, 'Ya existe una sesión de caja abierta');
+    }
+
     const branch =
       (await firstBranchOfTenant(tenantId, input.branchId || undefined)) ?? null;
     if (!branch) {
-      throw new Error('El tenant no tiene sucursales configuradas');
+      throw new ApiError(400, 'El tenant no tiene sucursales configuradas');
     }
 
     const session = await prisma.cashSession.create({
@@ -730,22 +739,53 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     input: CloseCashSessionInput
   ): Promise<CashSessionEntity> {
     const session = await prisma.cashSession.findFirst({
-      where: { id: input.sessionId, tenantId, status: 'OPEN' },
+      where: { id: input.sessionId, tenantId },
+      include: { movements: true },
     });
     if (!session) {
-      throw new Error('Sesión de caja no encontrada o ya cerrada');
+      throw new ApiError(404, 'Sesión de caja no encontrada');
     }
+    if (session.status !== 'OPEN') {
+      throw new ApiError(409, 'La sesión de caja ya está cerrada');
+    }
+
+    // Server-side money: expected = opening + Σmovements(IN−OUT) + Σsales −
+    // Σreturns; the difference against the physical count is derived here.
+    // Client-sent expectedAmount/difference are never read (the contract only
+    // accepts the physical count).
+    const [salesAgg, returnsAgg] = await Promise.all([
+      prisma.sale.aggregate({
+        where: { tenantId, cashSessionId: session.id },
+        _sum: { total: true },
+      }),
+      prisma.saleReturn.aggregate({
+        where: { tenantId, cashSessionId: session.id },
+        _sum: { totalRefund: true },
+      }),
+    ]);
+
+    const movementsNet = session.movements.reduce(
+      (acc, m) =>
+        m.type === 'IN' ? acc + m.amount.toNumber() : acc - m.amount.toNumber(),
+      0
+    );
+    const salesTotal = salesAgg._sum.total?.toNumber() ?? 0;
+    const returnsTotal = returnsAgg._sum.totalRefund?.toNumber() ?? 0;
+    const expectedAmount =
+      Math.round(
+        (session.openingAmount.toNumber() + movementsNet + salesTotal - returnsTotal) * 100
+      ) / 100;
+    const physicalCount = input.physicalCount;
+    const difference = Math.round((physicalCount - expectedAmount) * 100) / 100;
 
     const updated = await prisma.cashSession.update({
       where: { id: session.id },
       data: {
         status: 'CLOSED',
         closedAt: new Date(),
-        // P0 contract: only the physical count is client input. Expected/difference
-        // derivation from movements + sales lands with the full server-side close (S3b).
-        closingAmount: input.physicalCount,
-        expectedAmount: input.physicalCount,
-        difference: 0,
+        closingAmount: physicalCount,
+        expectedAmount,
+        difference,
       },
     });
 
@@ -762,8 +802,16 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       difference: updated.difference?.toNumber() ?? null,
       status: (updated.status as CashSessionEntity['status']) ?? 'CLOSED',
       notes: updated.notes,
-      movements: [],
-      salesTotal: 0,
+      movements: session.movements.map((m) => ({
+        id: m.id,
+        tenantId: m.tenantId,
+        sessionId: m.sessionId,
+        type: m.type as 'IN' | 'OUT',
+        amount: m.amount.toNumber(),
+        concept: m.concept,
+        createdAt: m.createdAt,
+      })),
+      salesTotal,
     };
   }
 
