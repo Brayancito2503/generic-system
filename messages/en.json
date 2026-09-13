@@ -1,4 +1,13 @@
 {
+    "errors": {
+        "unauthorized": "Unauthorized",
+        "forbidden": "Insufficient permissions",
+        "notFound": "Resource not found",
+        "conflict": "Conflict with the current state of the resource",
+        "badRequest": "Invalid request",
+        "validation": "Invalid data",
+        "internal": "Internal server error"
+    },
     "homePage": {
         "description": "White-label multi-tenant SaaS engine to run your business.",
         "login": "Sign in",

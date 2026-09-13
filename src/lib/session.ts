@@ -16,6 +16,12 @@ export class UnauthorizedError extends Error {
   }
 }
 
+export class ForbiddenError extends Error {
+  constructor(message = 'Permisos insuficientes') {
+    super(message);
+  }
+}
+
 export async function getSession(): Promise<SessionPayload | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
@@ -37,7 +43,7 @@ export async function requireApiAuth(roles?: SessionRole[]): Promise<SessionPayl
     throw new UnauthorizedError();
   }
   if (roles && !roles.includes(session.role)) {
-    throw new UnauthorizedError('Permisos insuficientes');
+    throw new ForbiddenError();
   }
   return session;
 }

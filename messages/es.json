@@ -1,4 +1,13 @@
 {
+    "errors": {
+        "unauthorized": "No autorizado",
+        "forbidden": "Permisos insuficientes",
+        "notFound": "Recurso no encontrado",
+        "conflict": "Conflicto con el estado actual del recurso",
+        "badRequest": "Solicitud inválida",
+        "validation": "Datos inválidos",
+        "internal": "Error interno del servidor"
+    },
     "homePage": {
         "description": "Motor SaaS multi-tenant de marca blanca para gestionar tu negocio.",
         "login": "Iniciar sesión",
