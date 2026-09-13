@@ -3,8 +3,8 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { Package, Search, Plus, AlertTriangle, TrendingUp, TrendingDown, Edit2, X, Loader2 } from 'lucide-react';
-import type { InventoryStockItem } from '../entities';
+import { Package, Search, Plus, AlertTriangle, TrendingUp, TrendingDown, Edit2, X, Loader2, Trash2 } from 'lucide-react';
+import type { InventoryStockItem, PurchaseOrderEntity, CashSessionEntity } from '../entities';
 import { apiGet, apiSend } from '../api';
 
 const fmt = (n: number) => `C$ ${n.toLocaleString('es-NI', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -24,25 +24,59 @@ export function InventoryView() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<ProductFormData>(emptyForm);
   const [editId, setEditId] = useState<string | null>(null);
+  const [formError, setFormError] = useState<Error | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<InventoryStockItem | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const { data: items = [], isPending, isError } = useQuery<InventoryStockItem[]>({
     queryKey: ['inventory'],
     queryFn: () => apiGet<InventoryStockItem[]>(`/inventory`),
   });
 
+  // There is no branch selector endpoint: the tenant's branch is derived from
+  // server data (existing purchase order or open cash session), same as in the
+  // purchase orders view. Stock writes cannot happen without it (400 server-side).
+  const { data: orders = [] } = useQuery<PurchaseOrderEntity[]>({
+    queryKey: ['purchase-orders'],
+    queryFn: () => apiGet<PurchaseOrderEntity[]>(`/purchase-orders`),
+  });
+  const { data: cashSession } = useQuery<CashSessionEntity | null>({
+    queryKey: ['cash-session'],
+    queryFn: () => apiGet<CashSessionEntity | null>(`/cash`),
+  });
+  const branchId = orders.find((o) => o.branchId)?.branchId ?? cashSession?.branchId ?? '';
+
   const createMutation = useMutation({
     mutationFn: (payload: Omit<InventoryStockItem, 'id' | 'tenantId' | 'isLowStock'>) =>
       apiSend<InventoryStockItem>(`/inventory`, 'POST', payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['inventory'] });
+      queryClient.invalidateQueries({ queryKey: ['distribution-dashboard'] });
+    },
+    onError: (e: Error) => setFormError(e),
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload: Partial<InventoryStockItem> }) =>
+    mutationFn: ({ id, payload }: { id: string; payload: Partial<InventoryStockItem> & { branchId?: string } }) =>
       apiSend<InventoryStockItem>(`/inventory/${id}`, 'PATCH', payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['inventory'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['inventory'] });
+      queryClient.invalidateQueries({ queryKey: ['distribution-dashboard'] });
+    },
+    onError: (e: Error) => setFormError(e),
   });
 
-  const mutationError: Error | null = createMutation.error ?? updateMutation.error;
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiSend<{ ok: boolean }>(`/inventory/${id}`, 'DELETE'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['inventory'] });
+      queryClient.invalidateQueries({ queryKey: ['distribution-dashboard'] });
+      setDeleteTarget(null);
+    },
+    onError: (e: Error) => setDeleteError(e.message),
+  });
+
+  const modalError: Error | null = createMutation.error ?? updateMutation.error ?? formError;
 
   const filtered = items.filter(i => {
     const matchSearch = i.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -56,23 +90,46 @@ export function InventoryView() {
 
   const handleSave = () => {
     if (!form.name || !form.price || !form.cost) return;
-    const payload = {
+    const stock = parseInt(form.stock) || 0;
+    const minAlert = parseInt(form.minAlert) || 5;
+    const catalog = {
       sku: form.sku, name: form.name, description: form.description,
       cost: parseFloat(form.cost), price: parseFloat(form.price),
-      stock: parseInt(form.stock) || 0,
-      minAlert: parseInt(form.minAlert) || 5,
     };
     if (editId) {
-      updateMutation.mutate({ id: editId, payload });
+      const target = items.find((i) => i.id === editId);
+      // The stock/minAlert fields are only sent when they actually changed:
+      // sending them without a branchId is a 400 server-side, so catalog-only
+      // edits must omit them when no branch is derivable.
+      const stockChanged = !target || stock !== target.stock || minAlert !== target.minAlert;
+      if (stockChanged && !branchId) {
+        setFormError(new Error(t('inventory.noBranchStockHint')));
+        return;
+      }
+      updateMutation.mutate({
+        id: editId,
+        payload: stockChanged ? { ...catalog, stock, minAlert, branchId } : catalog,
+      });
     } else {
-      createMutation.mutate(payload);
+      createMutation.mutate({ ...catalog, stock, minAlert });
     }
-    setShowForm(false); setForm(emptyForm); setEditId(null);
+    setShowForm(false); setForm(emptyForm); setEditId(null); setFormError(null);
   };
 
   const handleEdit = (item: InventoryStockItem) => {
     setForm({ sku: item.sku || '', name: item.name, description: item.description || '', cost: item.cost.toString(), price: item.price.toString(), stock: item.stock.toString(), minAlert: item.minAlert.toString() });
+    setFormError(null);
     setEditId(item.id); setShowForm(true);
+  };
+
+  const openCreate = () => {
+    setForm(emptyForm); setFormError(null); setEditId(null); setShowForm(true);
+  };
+
+  const confirmDelete = () => {
+    if (!deleteTarget) return;
+    setDeleteError(null);
+    deleteMutation.mutate(deleteTarget.id);
   };
 
   return (
@@ -87,7 +144,7 @@ export function InventoryView() {
         </div>
         <button
           type="button"
-          onClick={() => { setShowForm(true); setForm(emptyForm); setEditId(null); }}
+          onClick={openCreate}
           className="flex items-center gap-2 bg-primary text-primary-foreground text-sm font-medium px-4 py-2.5 rounded-lg transition-colors shadow-xs"
         >
           <Plus className="w-4 h-4" /> {t('inventory.addProduct')}
@@ -97,10 +154,10 @@ export function InventoryView() {
       {/* Stats Row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          { label: 'Total Productos', value: items.length.toString(), icon: Package, color: 'text-primary' },
+          { label: t('inventory.statsTotal'), value: items.length.toString(), icon: Package, color: 'text-primary' },
           { label: t('dashboard.kpiInventory'), value: isPending ? '—' : fmt(totalValue), icon: TrendingUp, color: 'text-emerald-500' },
           { label: t('dashboard.kpiAlerts'), value: lowCount.toString(), icon: AlertTriangle, color: 'text-amber-500' },
-          { label: 'Productos OK', value: (items.length - lowCount).toString(), icon: TrendingDown, color: 'text-violet-500' },
+          { label: t('inventory.statsOk'), value: (items.length - lowCount).toString(), icon: TrendingDown, color: 'text-violet-500' },
         ].map((s, i) => (
           <div key={i} className="bg-card border border-border rounded-xl p-4 shadow-xs">
             <s.icon className={`w-5 h-5 ${s.color} mb-2`} />
@@ -135,7 +192,7 @@ export function InventoryView() {
           <Loader2 className="w-5 h-5 animate-spin" /> {t('sales.processing')}
         </div>
       ) : isError ? (
-        <div className="py-16 text-center text-destructive text-sm">Error al cargar el inventario.</div>
+        <div className="py-16 text-center text-destructive text-sm">{t('inventory.loadError')}</div>
       ) : (
         <div className="bg-card border border-border rounded-xl overflow-hidden shadow-xs">
           <div className="overflow-x-auto">
@@ -146,11 +203,11 @@ export function InventoryView() {
                   <th className="text-left text-xs text-muted-foreground font-medium px-4 py-3">{t('inventory.colName')}</th>
                   <th className="text-right text-xs text-muted-foreground font-medium px-4 py-3">{t('inventory.colCost')}</th>
                   <th className="text-right text-xs text-muted-foreground font-medium px-4 py-3">{t('inventory.colPrice')}</th>
-                  <th className="text-right text-xs text-muted-foreground font-medium px-4 py-3">Margen</th>
+                  <th className="text-right text-xs text-muted-foreground font-medium px-4 py-3">{t('inventory.colMargin')}</th>
                   <th className="text-center text-xs text-muted-foreground font-medium px-4 py-3">{t('inventory.colStock')}</th>
                   <th className="text-center text-xs text-muted-foreground font-medium px-4 py-3">{t('inventory.colMinAlert')}</th>
                   <th className="text-center text-xs text-muted-foreground font-medium px-4 py-3">{t('inventory.colStatus')}</th>
-                  <th className="text-center text-xs text-muted-foreground font-medium px-4 py-3">Acción</th>
+                  <th className="text-center text-xs text-muted-foreground font-medium px-4 py-3">{t('inventory.colActions')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -174,9 +231,14 @@ export function InventoryView() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <button type="button" onClick={() => handleEdit(item)} className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center justify-center gap-1">
+                          <button type="button" onClick={() => handleEdit(item)} className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors" title={t('inventory.editTitle')}>
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button type="button" onClick={() => { setDeleteTarget(item); setDeleteError(null); }} className="p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors" title={t('inventory.delete')}>
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -184,7 +246,7 @@ export function InventoryView() {
               </tbody>
             </table>
             {filtered.length === 0 && (
-              <div className="text-center py-12 text-muted-foreground text-sm">No se encontraron productos.</div>
+              <div className="text-center py-12 text-muted-foreground text-sm">{t('inventory.emptySearch')}</div>
             )}
           </div>
         </div>
@@ -195,39 +257,80 @@ export function InventoryView() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
           <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-lg shadow-2xl">
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-lg font-bold text-foreground">{editId ? 'Editar Producto' : t('inventory.addProduct')}</h2>
+              <h2 className="text-lg font-bold text-foreground">{editId ? t('inventory.editTitle') : t('inventory.addProduct')}</h2>
               <button type="button" onClick={() => setShowForm(false)} className="p-2 rounded-lg hover:bg-accent text-muted-foreground"><X className="w-5 h-5" /></button>
             </div>
             <div className="grid grid-cols-2 gap-4">
               {[
-                { label: 'SKU', key: 'sku', placeholder: 'ACE-001', full: false },
-                { label: 'Nombre del Producto *', key: 'name', placeholder: 'Aceite Corona 1L', full: true },
-                { label: 'Descripción', key: 'description', placeholder: 'Caja x 24 unidades', full: true },
-                { label: 'Costo (C$) *', key: 'cost', placeholder: '0.00', full: false },
-                { label: 'Precio Venta (C$) *', key: 'price', placeholder: '0.00', full: false },
-                { label: 'Stock Actual', key: 'stock', placeholder: '0', full: false },
-                { label: 'Stock Mínimo', key: 'minAlert', placeholder: '5', full: false },
+                { labelKey: 'fieldSku', placeholderKey: 'placeholderSku', key: 'sku', full: false },
+                { labelKey: 'fieldName', placeholderKey: 'placeholderName', key: 'name', full: true },
+                { labelKey: 'fieldDescription', placeholderKey: 'placeholderDescription', key: 'description', full: true },
+                { labelKey: 'fieldCost', placeholderKey: 'placeholderCost', key: 'cost', full: false },
+                { labelKey: 'fieldPrice', placeholderKey: 'placeholderPrice', key: 'price', full: false },
+                { labelKey: 'fieldStock', placeholderKey: 'placeholderStock', key: 'stock', full: false },
+                { labelKey: 'fieldMinAlert', placeholderKey: 'placeholderMinAlert', key: 'minAlert', full: false },
               ].map(f => (
                 <div key={f.key} className={f.full ? 'col-span-2' : 'col-span-1'}>
-                  <label className="block text-xs text-muted-foreground mb-1">{f.label}</label>
+                  <label className="block text-xs text-muted-foreground mb-1">{t(`inventory.${f.labelKey}`)}</label>
                   <input
                     value={(form as unknown as Record<string, string>)[f.key]}
                     onChange={e => setForm(prev => ({ ...prev, [f.key]: e.target.value }))}
-                    placeholder={f.placeholder}
+                    placeholder={t(`inventory.${f.placeholderKey}`)}
                     className="w-full bg-background border border-border rounded-lg px-3 py-2.5 text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
                   />
                 </div>
               ))}
             </div>
-            {mutationError && (
+            {modalError && (
               <div className="mt-4 flex items-center gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-lg px-3 py-2">
-                <AlertTriangle className="w-4 h-4 shrink-0" /> {mutationError.message}
+                <AlertTriangle className="w-4 h-4 shrink-0" /> {modalError.message}
               </div>
             )}
             <div className="flex gap-3 mt-6">
-              <button type="button" onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-lg border border-border text-muted-foreground hover:bg-accent transition-colors text-sm">Cancelar</button>
+              <button type="button" onClick={() => setShowForm(false)} className="flex-1 py-2.5 rounded-lg border border-border text-muted-foreground hover:bg-accent transition-colors text-sm">{t('inventory.cancel')}</button>
               <button type="button" onClick={handleSave} className="flex-1 py-2.5 rounded-lg bg-primary text-primary-foreground font-medium transition-colors text-sm shadow-xs">
-                {editId ? 'Guardar Cambios' : t('inventory.addProduct')}
+                {editId ? t('inventory.saveEdit') : t('inventory.addProduct')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmación de Eliminación */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
+                <Trash2 className="w-5 h-5 text-destructive" /> {t('inventory.deleteTitle')}
+              </h2>
+              <button type="button" onClick={() => setDeleteTarget(null)} className="p-2 rounded-lg hover:bg-accent text-muted-foreground"><X className="w-5 h-5" /></button>
+            </div>
+            <p className="text-sm text-muted-foreground mb-4">
+              {t('inventory.deleteConfirm', { name: deleteTarget.name })}
+            </p>
+            {deleteError && (
+              <div className="mb-4 flex items-center gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-lg px-3 py-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" /> {deleteError}
+              </div>
+            )}
+            <div className="flex gap-3 mt-6">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleteMutation.isPending}
+                className="flex-1 py-2.5 rounded-lg border border-border text-muted-foreground hover:bg-accent transition-colors text-sm"
+              >
+                {t('inventory.cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                disabled={deleteMutation.isPending}
+                className="flex-1 py-2.5 rounded-lg bg-destructive text-destructive-foreground font-medium transition-colors text-sm shadow-xs disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {deleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                {t('inventory.delete')}
               </button>
             </div>
           </div>
