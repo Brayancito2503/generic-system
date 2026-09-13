@@ -1,4 +1,5 @@
 import { prisma } from '../prisma';
+import { ApiError } from '@/lib/api-error';
 import type {
   IDistributionRepository,
   CreateInventoryItemInput,
@@ -844,13 +845,13 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     input: RegisterSaleInput
   ): Promise<SaleEntity> {
     if (!input.lines.length) {
-      throw new Error('La venta no tiene productos');
+      throw new ApiError(400, 'La venta no tiene productos');
     }
 
     const mergedLines = new Map<string, number>();
     for (const line of input.lines) {
       if (line.quantity <= 0 || !Number.isInteger(line.quantity)) {
-        throw new Error('Cantidad inválida en uno de los productos');
+        throw new ApiError(400, 'Cantidad inválida en uno de los productos');
       }
       mergedLines.set(
         line.itemId,
@@ -866,7 +867,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       where: { tenantId, status: 'OPEN' },
     });
     if (!openSession) {
-      throw new Error('Debe abrir la caja antes de registrar una venta');
+      throw new ApiError(400, 'Debe abrir la caja antes de registrar una venta');
     }
     const branchId = openSession.branchId;
 
@@ -874,7 +875,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       where: { tenantId, id: { in: lines.map((l) => l.itemId) } },
     });
     if (items.length !== lines.length) {
-      throw new Error('Uno o más productos no existen');
+      throw new ApiError(400, 'Uno o más productos no existen');
     }
     const itemById = new Map(items.map((i) => [i.id, i] as const));
 
@@ -884,7 +885,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         where: { tenantId, id: input.personId },
         select: { firstName: true, lastName: true },
       });
-      if (!customer) throw new Error('Cliente no encontrado');
+      if (!customer) throw new ApiError(404, 'Cliente no encontrado');
     }
 
     const defaultTax =
@@ -910,6 +911,19 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       const taxAmount = taxRatePct > 0 ? base * (taxRatePct / (100 + taxRatePct)) : 0;
       const total = base;
 
+      // Server-side money: only the tendered amount is client input; the
+      // balance is derived here and the receivable decision follows from it.
+      const paidAmount = input.paidAmount ?? total;
+      const balance = Math.max(0, Math.round((total - paidAmount) * 100) / 100);
+      if (balance > 0 && !input.personId) {
+        throw new ApiError(
+          400,
+          'Las ventas a crédito requieren un cliente asociado'
+        );
+      }
+
+      // Stock: decrement only when the branch has enough; otherwise 409 and the
+      // whole transaction rolls back (nothing is written).
       for (const line of lines) {
         const result = await tx.inventory.updateMany({
           where: {
@@ -922,12 +936,16 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         });
         if (result.count === 0) {
           const item = itemById.get(line.itemId);
-          throw new Error(
+          throw new ApiError(
+            409,
             `Stock insuficiente para "${item?.name ?? 'producto'}"`
           );
         }
       }
 
+      // Fiscal continuity: the SaleCounter upsert+increment lives inside the
+      // sale transaction, so INV numbers never restart nor collide. After the
+      // seed (lastNumber 16) the first real sale is INV-…-000017.
       const counter = await tx.saleCounter.upsert({
         where: { tenantId },
         update: { lastNumber: { increment: 1 } },
@@ -944,7 +962,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         counter.lastNumber
       ).padStart(6, '0')}`;
 
-      return tx.sale.create({
+      const created = await tx.sale.create({
         data: {
           tenantId,
           personId: input.personId ?? null,
@@ -953,6 +971,9 @@ export class PrismaDistributionRepository implements IDistributionRepository {
           taxAmount,
           discount,
           total,
+          paymentMethod: input.paymentMethod,
+          paidAmount,
+          balance,
           invoiceNumber,
           notes: input.notes ?? null,
           status: 'COMPLETED',
@@ -969,6 +990,24 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         },
         include: { items: { include: { item: true } } },
       });
+
+      // Credit / partial payment: a receivable opens only when a balance
+      // remains after the tender; same transaction, so it always matches the
+      // sale it belongs to.
+      if (balance > 0) {
+        await tx.receivable.create({
+          data: {
+            tenantId,
+            saleId: created.id,
+            personId: input.personId!,
+            originalAmount: balance,
+            balance,
+            status: 'OPEN',
+          },
+        });
+      }
+
+      return created;
     });
 
     return {
@@ -983,12 +1022,9 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       taxAmount: saleResult.taxAmount.toNumber(),
       discount: saleResult.discount.toNumber(),
       total: saleResult.total.toNumber(),
-      paymentMethod: input.paymentMethod,
-      paidAmount: input.paidAmount ?? saleResult.total.toNumber(),
-      balance: Math.max(
-        0,
-        saleResult.total.toNumber() - (input.paidAmount ?? saleResult.total.toNumber())
-      ),
+      paymentMethod: saleResult.paymentMethod as PaymentMethod,
+      paidAmount: saleResult.paidAmount.toNumber(),
+      balance: saleResult.balance.toNumber(),
       invoiceNumber: saleResult.invoiceNumber,
       status: saleResult.status,
       createdAt: saleResult.createdAt,
