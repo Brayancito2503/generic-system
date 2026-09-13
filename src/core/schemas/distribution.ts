@@ -7,6 +7,9 @@ import { hasAnyDefinedField } from './tenant';
 
 const idString = z.string().trim().min(1).max(60);
 const nullableText = z.string().trim().max(500).nullish();
+
+/** Path-param contract for `[id]` routes. */
+export const idParamSchema = idString;
 const nonNegativeNumber = z.number().finite().nonnegative();
 
 /** Accepts optional emails that may arrive as '' from legacy forms. */

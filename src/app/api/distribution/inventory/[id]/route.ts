@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTenantId } from '@/lib/session';
+import { requireApiAuth, requireTenantId } from '@/lib/session';
+import { ApiError, handleApiError } from '@/lib/api-error';
+import { idParamSchema, updateInventoryItemSchema } from '@/core/schemas/distribution';
 import { PrismaDistributionRepository } from '@/infrastructure/db/repositories/prisma-distribution.repository';
 
 const repository = new PrismaDistributionRepository();
@@ -8,41 +10,33 @@ export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const tenantId = await requireTenantId();
-  const { id } = await context.params;
-
-  if (!tenantId || !id) {
-    return NextResponse.json(
-      { error: 'No autorizado' },
-      { status: 401 }
-    );
-  }
-
   try {
-    const body = await request.json();
-    const input: {
-      sku?: string;
-      name?: string;
-      description?: string;
-      cost?: number;
-      price?: number;
-      stock?: number;
-      minAlert?: number;
-    } = {};
+    await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
+    const tenantId = await requireTenantId();
+    if (!tenantId) throw new ApiError(401, 'No autorizado');
 
-    if (body.sku !== undefined) input.sku = String(body.sku);
-    if (body.name !== undefined) input.name = String(body.name);
-    if (body.description !== undefined) input.description = String(body.description);
-    if (typeof body.cost === 'number') input.cost = body.cost;
-    if (typeof body.price === 'number') input.price = body.price;
-    if (typeof body.stock === 'number') input.stock = body.stock;
-    if (typeof body.minAlert === 'number') input.minAlert = body.minAlert;
+    const { id } = await context.params;
+    if (!idParamSchema.safeParse(id).success) throw new ApiError(400, 'Datos inválidos');
 
-    const updated = await repository.updateInventoryItem(tenantId, id, input);
+    const body: unknown = await request.json();
+    const parsed = updateInventoryItemSchema.safeParse(body);
+    if (!parsed.success) throw new ApiError(400, 'Datos inválidos');
+
+    // branchId-scoped writes land in P1 (multi-branch updateInventoryItem fix).
+    const updated = await repository.updateInventoryItem(tenantId, id, {
+      ...(parsed.data.sku !== undefined ? { sku: parsed.data.sku } : {}),
+      ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+      ...(parsed.data.description !== undefined
+        ? { description: parsed.data.description }
+        : {}),
+      ...(parsed.data.cost !== undefined ? { cost: parsed.data.cost } : {}),
+      ...(parsed.data.price !== undefined ? { price: parsed.data.price } : {}),
+      ...(parsed.data.stock !== undefined ? { stock: parsed.data.stock } : {}),
+      ...(parsed.data.minAlert !== undefined ? { minAlert: parsed.data.minAlert } : {}),
+    });
+
     return NextResponse.json(updated);
   } catch (error) {
-    const message = error instanceof Error ? error.message : '';
-    const status = message.includes('SKU') ? 409 : message.includes('no encontrado') ? 400 : 500;
-    return NextResponse.json({ error: message || 'Error al actualizar el producto' }, { status });
+    return handleApiError(error);
   }
 }

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTenantId } from '@/lib/session';
+import { requireApiAuth, requireTenantId } from '@/lib/session';
+import { ApiError, handleApiError } from '@/lib/api-error';
+import { idParamSchema, updateTaxRateSchema } from '@/core/schemas/distribution';
 import { PrismaDistributionRepository } from '@/infrastructure/db/repositories/prisma-distribution.repository';
 
 const repository = new PrismaDistributionRepository();
@@ -8,44 +10,31 @@ export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const tenantId = await requireTenantId();
-  if (!tenantId) {
-    return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
-  }
-
   try {
+    await requireApiAuth(['TENANT_ADMIN']);
+    const tenantId = await requireTenantId();
+    if (!tenantId) throw new ApiError(401, 'No autorizado');
+
     const { id } = await context.params;
-    const body = await request.json();
-    if (
-      body.name === undefined &&
-      typeof body.rate !== 'number' &&
-      body.isInclusive === undefined &&
-      body.isActive === undefined &&
-      body.isDefault === undefined
-    ) {
-      return NextResponse.json(
-        { error: 'No hay campos válidos para actualizar' },
-        { status: 400 }
-      );
-    }
+    if (!idParamSchema.safeParse(id).success) throw new ApiError(400, 'Datos inválidos');
+
+    const body: unknown = await request.json();
+    const parsed = updateTaxRateSchema.safeParse(body);
+    if (!parsed.success) throw new ApiError(400, 'Datos inválidos');
 
     const updated = await repository.updateTaxRate(tenantId, id, {
-      ...(body.name !== undefined ? { name: String(body.name) } : {}),
-      ...(typeof body.rate === 'number' ? { rate: body.rate } : {}),
-      ...(body.isInclusive !== undefined ? { isInclusive: body.isInclusive === true } : {}),
-      ...(body.isActive !== undefined ? { isActive: body.isActive === true } : {}),
-      ...(body.isDefault !== undefined ? { isDefault: body.isDefault === true } : {}),
+      ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+      ...(parsed.data.rate !== undefined ? { rate: parsed.data.rate } : {}),
+      ...(parsed.data.isInclusive !== undefined
+        ? { isInclusive: parsed.data.isInclusive }
+        : {}),
+      ...(parsed.data.isActive !== undefined ? { isActive: parsed.data.isActive } : {}),
+      ...(parsed.data.isDefault !== undefined ? { isDefault: parsed.data.isDefault } : {}),
     });
 
     return NextResponse.json(updated);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Tasa no encontrada';
-    const notFound = message === 'Tasa de impuesto no encontrada';
-    console.error('[tax/:id]', error);
-    return NextResponse.json(
-      { error: message },
-      { status: notFound ? 404 : 500 }
-    );
+    return handleApiError(error);
   }
 }
 
@@ -53,19 +42,17 @@ export async function DELETE(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const tenantId = await requireTenantId();
-  if (!tenantId) {
-    return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
-  }
-
   try {
+    await requireApiAuth(['TENANT_ADMIN']);
+    const tenantId = await requireTenantId();
+    if (!tenantId) throw new ApiError(401, 'No autorizado');
+
     const { id } = await context.params;
+    if (!idParamSchema.safeParse(id).success) throw new ApiError(400, 'Datos inválidos');
+
     await repository.deleteTaxRate(tenantId, id);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Tasa no encontrada';
-    const isExpected = message.includes('no encontrada') || message.includes('al menos una');
-    console.error('[tax/:id]', error);
-    return NextResponse.json({ error: message }, { status: isExpected ? 400 : 500 });
+    return handleApiError(error);
   }
 }

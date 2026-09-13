@@ -1,55 +1,54 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTenantId } from '@/lib/session';
+import { requireApiAuth, requireTenantId } from '@/lib/session';
+import { ApiError, handleApiError } from '@/lib/api-error';
+import { noQueryParamsSchema } from '@/core/schemas/tenant';
+import {
+  createInventoryItemSchema,
+} from '@/core/schemas/distribution';
 import { PrismaDistributionRepository } from '@/infrastructure/db/repositories/prisma-distribution.repository';
 
 const repository = new PrismaDistributionRepository();
 
-export async function GET() {
-  const tenantId = await requireTenantId();
-  if (!tenantId) {
-    return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
-  }
-
+export async function GET(request: NextRequest) {
   try {
+    await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
+    const tenantId = await requireTenantId();
+    if (!tenantId) throw new ApiError(401, 'No autorizado');
+
+    const query = noQueryParamsSchema.safeParse(
+      Object.fromEntries(request.nextUrl.searchParams.entries())
+    );
+    if (!query.success) throw new ApiError(400, 'Datos inválidos');
+
     const items = await repository.getInventory(tenantId);
     return NextResponse.json(items);
   } catch (error) {
-    console.error('[inventory]', error);
-    return NextResponse.json({ error: 'Error al obtener el inventario' }, { status: 500 });
+    return handleApiError(error);
   }
 }
 
 export async function POST(request: NextRequest) {
-  const tenantId = await requireTenantId();
-  if (!tenantId) {
-    return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
-  }
-
   try {
-    const body = await request.json();
-    const { sku, name, description, cost, price, stock, minAlert } = body;
+    await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
+    const tenantId = await requireTenantId();
+    if (!tenantId) throw new ApiError(401, 'No autorizado');
 
-    if (!name || typeof cost !== 'number' || typeof price !== 'number') {
-      return NextResponse.json(
-        { error: 'name, cost y price son obligatorios' },
-        { status: 400 }
-      );
-    }
+    const body: unknown = await request.json();
+    const parsed = createInventoryItemSchema.safeParse(body);
+    if (!parsed.success) throw new ApiError(400, 'Datos inválidos');
 
     const created = await repository.createInventoryItem(tenantId, {
-      sku: sku ?? undefined,
-      name: String(name),
-      description: description ?? undefined,
-      cost,
-      price,
-      stock: typeof stock === 'number' ? stock : 0,
-      minAlert: typeof minAlert === 'number' ? minAlert : 5,
+      sku: parsed.data.sku,
+      name: parsed.data.name,
+      description: parsed.data.description,
+      cost: parsed.data.cost,
+      price: parsed.data.price,
+      stock: parsed.data.stock,
+      minAlert: parsed.data.minAlert,
     });
 
     return NextResponse.json(created, { status: 201 });
   } catch (error) {
-    const message = error instanceof Error ? error.message : '';
-    const status = message.includes('SKU') ? 409 : 500;
-    return NextResponse.json({ error: message || 'Error al crear el producto' }, { status });
+    return handleApiError(error);
   }
 }
