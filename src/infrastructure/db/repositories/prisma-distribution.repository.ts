@@ -11,6 +11,7 @@ import type {
   CloseCashSessionInput,
   CreateTaxRateInput,
   UpdateTaxRateInput,
+  ReceivePurchaseOrderInput,
   RegisterSaleInput,
 } from '@/core/ports/distribution-repository.port';
 import type {
@@ -398,6 +399,127 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       receivedAt: po.receivedAt,
       createdAt: po.createdAt,
     }));
+  }
+
+  async receivePurchaseOrder(
+    tenantId: string,
+    poId: string,
+    input: ReceivePurchaseOrderInput
+  ): Promise<PurchaseOrderEntity> {
+    const po = await prisma.purchaseOrder.findFirst({
+      where: { tenantId, id: poId },
+      include: {
+        supplier: true,
+        branch: true,
+        items: { include: { item: true } },
+      },
+    });
+    if (!po) {
+      throw new ApiError(404, 'Orden de compra no encontrada');
+    }
+    if (po.status === 'CANCELLED') {
+      throw new ApiError(409, 'La orden de compra está cancelada');
+    }
+
+    const mergedLines = new Map<string, number>();
+    for (const line of input.receivedItems) {
+      if (line.quantity <= 0 || !Number.isInteger(line.quantity)) {
+        throw new ApiError(400, 'Cantidad inválida en la recepción');
+      }
+      mergedLines.set(
+        line.itemId,
+        (mergedLines.get(line.itemId) ?? 0) + line.quantity
+      );
+    }
+    const lines = [...mergedLines.entries()].map(([itemId, quantity]) => ({
+      itemId,
+      quantity,
+    }));
+
+    // Over-receive guard: each line must fit within the still-pending quantity
+    // (quantity − receivedQty already accumulated) → 409 when exceeded; an
+    // already-complete PO has remaining 0 for every line, so it is rejected too.
+    for (const line of lines) {
+      const poItem = po.items.find((i) => i.itemId === line.itemId);
+      if (!poItem) {
+        throw new ApiError(400, 'El producto no pertenece a la orden de compra');
+      }
+      const remaining = poItem.quantity - poItem.receivedQty;
+      if (line.quantity > remaining) {
+        throw new ApiError(
+          409,
+          `La cantidad a recibir supera el pendiente de "${poItem.item.name}"`
+        );
+      }
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      for (const line of lines) {
+        const inventory = await tx.inventory.updateMany({
+          where: {
+            tenantId,
+            branchId: po.branchId,
+            itemId: line.itemId,
+          },
+          data: { stock: { increment: line.quantity } },
+        });
+        if (inventory.count === 0) {
+          throw new ApiError(
+            400,
+            'No existe inventario para ese producto en la sucursal de la orden'
+          );
+        }
+        await tx.purchaseOrderItem.updateMany({
+          where: { orderId: po.id, itemId: line.itemId },
+          data: { receivedQty: { increment: line.quantity } },
+        });
+      }
+
+      const poItems = await tx.purchaseOrderItem.findMany({
+        where: { orderId: po.id },
+      });
+      const complete =
+        poItems.length > 0 && poItems.every((i) => i.receivedQty >= i.quantity);
+
+      return tx.purchaseOrder.update({
+        where: { id: po.id },
+        data: {
+          status: complete ? 'RECEIVED' : 'ORDERED',
+          receivedAt: complete ? new Date() : po.receivedAt,
+        },
+        include: {
+          supplier: true,
+          branch: true,
+          items: { include: { item: true } },
+        },
+      });
+    });
+
+    return {
+      id: updated.id,
+      tenantId: updated.tenantId,
+      supplierId: updated.supplierId,
+      supplierName: updated.supplier.name,
+      branchId: updated.branchId,
+      orderNumber: updated.orderNumber,
+      status: (updated.status as PurchaseOrderEntity['status']) ?? 'ORDERED',
+      subtotal: updated.subtotal.toNumber(),
+      taxAmount: updated.taxAmount.toNumber(),
+      total: updated.total.toNumber(),
+      notes: updated.notes,
+      expectedDate: updated.receivedAt ?? updated.createdAt,
+      receivedAt: updated.receivedAt,
+      createdAt: updated.createdAt,
+      items: updated.items.map((i) => ({
+        id: i.id,
+        orderId: i.orderId,
+        itemId: i.itemId,
+        itemName: i.item.name,
+        quantity: i.quantity,
+        receivedQty: i.receivedQty,
+        cost: i.cost.toNumber(),
+      })),
+    };
   }
 
   // ─── Employees ──────────────────────────────────────────────────────────────

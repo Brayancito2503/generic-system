@@ -196,6 +196,11 @@ export interface IDistributionRepository {
   getSuppliers(tenantId: string): Promise<SupplierEntity[]>;
   createSupplier(tenantId: string, input: CreateSupplierInput): Promise<SupplierEntity>;
   getPurchaseOrders(tenantId: string): Promise<PurchaseOrderEntity[]>;
+  receivePurchaseOrder(
+    tenantId: string,
+    poId: string,
+    input: ReceivePurchaseOrderInput
+  ): Promise<PurchaseOrderEntity>;
   getEmployees(tenantId: string): Promise<EmployeeEntity[]>;
   createEmployee(tenantId: string, input: CreateEmployeeInput): Promise<EmployeeEntity>;
   getOpenCashSession(tenantId: string): Promise<CashSessionEntity | null>;
