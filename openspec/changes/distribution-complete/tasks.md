@@ -55,8 +55,8 @@ Feature-branch-chain base boundaries: PR #1 (S1) base = `feature/distribution-co
 
 ## Phase 3 — S3 P0 (sale-blocking)
 
-- [ ] 3.1 Backup DB; `prisma/schema.prisma` M + `prisma/migrations/<ts>_distribution_complete/migration.sql` C: additive DDL (Sale.paymentMethod/paidAmount/balance; PurchaseOrderItem.receivedQty; InvoicingConfig; Receivable; ReceivablePayment; SaleReturn; SaleReturnItem); `prisma generate`; never unsupervised `migrate dev` [S3a]
-- [ ] 3.2 `src/core/entities/distribution.ts` M: cash/sale fields, invoicing/return/receivable types, `PaginatedResult<T>`; `src/core/ports/distribution-repository.port.ts` M: `CloseCashSessionInput {sessionId, physicalCount}` + customer/PO/employee/config contracts [S3a]
+- [x] 3.1 Backup DB; `prisma/schema.prisma` M + `prisma/migrations/<ts>_distribution_complete/migration.sql` C: additive DDL (Sale.paymentMethod/paidAmount/balance; PurchaseOrderItem.receivedQty; InvoicingConfig; Receivable; ReceivablePayment; SaleReturn; SaleReturnItem); `prisma generate`; never unsupervised `migrate dev` [S3a]
+- [x] 3.2 `src/core/entities/distribution.ts` M: cash/sale fields, invoicing/return/receivable types, `PaginatedResult<T>`; `src/core/ports/distribution-repository.port.ts` M: `CloseCashSessionInput {sessionId, physicalCount}` + customer/PO/employee/config contracts [S3a]
 - [ ] 3.3 `src/infrastructure/db/repositories/prisma-distribution.repository.ts` M: sale tx (stock decrement → SaleCounter++ → sale+items → receivable; `@@unique([tenantId, invoiceNumber])`; next `INV-YYYYMMDD-######` after seed 16), server-side close (expected vs physicalCount), open-session 409, PO-receive qty ≤ remaining → 409 [S3b]
 - [ ] 3.4 Open question — SaleCounter continuity: `prisma/seed.ts` M: upsert `SaleCounter{lastNumber: 16}` (after 16 `FAC-*`), items to 3 seeded POs, default InvoicingConfig [S3b]
 - [ ] 3.5 Routes: `src/app/api/distribution/tax/config/route.ts` C GET/PUT TENANT_ADMIN+Zod; `customers/route.ts` M POST; `customers/[id]/route.ts` C PATCH; `purchase-orders/route.ts` M POST; `purchase-orders/[id]/receive/route.ts` C POST (409 over-receive) [S3c]
