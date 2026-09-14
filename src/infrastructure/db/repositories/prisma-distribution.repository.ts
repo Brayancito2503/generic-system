@@ -1,15 +1,25 @@
 import { prisma } from '../prisma';
+import { ApiError } from '@/lib/api-error';
+import { hashPassword } from '@/lib/security';
+import { randomUUID } from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import type {
   IDistributionRepository,
   CreateInventoryItemInput,
   UpdateInventoryItemInput,
   CreateSupplierInput,
   CreateEmployeeInput,
+  CreateCustomerInput,
+  UpdateCustomerInput,
+  CreatePurchaseOrderInput,
+  UpdateEmployeeInput,
+  UpdateInvoicingConfigInput,
   OpenCashSessionInput,
   AddCashMovementInput,
   CloseCashSessionInput,
   CreateTaxRateInput,
   UpdateTaxRateInput,
+  ReceivePurchaseOrderInput,
   RegisterSaleInput,
 } from '@/core/ports/distribution-repository.port';
 import type {
@@ -19,7 +29,9 @@ import type {
   DistributionDashboardStats,
   EmployeeEntity,
   FiscalSummary,
+  InvoicingConfigEntity,
   InventoryStockItem,
+  PaymentMethod,
   PurchaseOrderEntity,
   RecentSale,
   SaleEntity,
@@ -31,6 +43,9 @@ interface EmployeePersonMetadata {
   department?: string;
   commissionRate?: number;
 }
+
+/** Employee row with its Person graph, shared by the entity mapper methods. */
+type EmployeeWithPerson = Prisma.EmployeeGetPayload<{ include: { person: true } }>;
 
 const DAY_LABELS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'] as const;
 
@@ -398,6 +413,255 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     }));
   }
 
+  async receivePurchaseOrder(
+    tenantId: string,
+    poId: string,
+    input: ReceivePurchaseOrderInput
+  ): Promise<PurchaseOrderEntity> {
+    const po = await prisma.purchaseOrder.findFirst({
+      where: { tenantId, id: poId },
+      include: {
+        supplier: true,
+        branch: true,
+        items: { include: { item: true } },
+      },
+    });
+    if (!po) {
+      throw new ApiError(404, 'Orden de compra no encontrada');
+    }
+    if (po.status === 'CANCELLED') {
+      throw new ApiError(409, 'La orden de compra está cancelada');
+    }
+
+    const mergedLines = new Map<string, number>();
+    for (const line of input.receivedItems) {
+      if (line.quantity <= 0 || !Number.isInteger(line.quantity)) {
+        throw new ApiError(400, 'Cantidad inválida en la recepción');
+      }
+      mergedLines.set(
+        line.itemId,
+        (mergedLines.get(line.itemId) ?? 0) + line.quantity
+      );
+    }
+    const lines = [...mergedLines.entries()].map(([itemId, quantity]) => ({
+      itemId,
+      quantity,
+    }));
+
+    // Over-receive guard: each line must fit within the still-pending quantity
+    // (quantity − receivedQty already accumulated) → 409 when exceeded; an
+    // already-complete PO has remaining 0 for every line, so it is rejected too.
+    for (const line of lines) {
+      const poItem = po.items.find((i) => i.itemId === line.itemId);
+      if (!poItem) {
+        throw new ApiError(400, 'El producto no pertenece a la orden de compra');
+      }
+      const remaining = poItem.quantity - poItem.receivedQty;
+      if (line.quantity > remaining) {
+        throw new ApiError(
+          409,
+          `La cantidad a recibir supera el pendiente de "${poItem.item.name}"`
+        );
+      }
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      for (const line of lines) {
+        const inventory = await tx.inventory.updateMany({
+          where: {
+            tenantId,
+            branchId: po.branchId,
+            itemId: line.itemId,
+          },
+          data: { stock: { increment: line.quantity } },
+        });
+        if (inventory.count === 0) {
+          throw new ApiError(
+            400,
+            'No existe inventario para ese producto en la sucursal de la orden'
+          );
+        }
+        await tx.purchaseOrderItem.updateMany({
+          where: { orderId: po.id, itemId: line.itemId },
+          data: { receivedQty: { increment: line.quantity } },
+        });
+      }
+
+      const poItems = await tx.purchaseOrderItem.findMany({
+        where: { orderId: po.id },
+      });
+      const complete =
+        poItems.length > 0 && poItems.every((i) => i.receivedQty >= i.quantity);
+
+      return tx.purchaseOrder.update({
+        where: { id: po.id },
+        data: {
+          status: complete ? 'RECEIVED' : 'ORDERED',
+          receivedAt: complete ? new Date() : po.receivedAt,
+        },
+        include: {
+          supplier: true,
+          branch: true,
+          items: { include: { item: true } },
+        },
+      });
+    });
+
+    return {
+      id: updated.id,
+      tenantId: updated.tenantId,
+      supplierId: updated.supplierId,
+      supplierName: updated.supplier.name,
+      branchId: updated.branchId,
+      orderNumber: updated.orderNumber,
+      status: (updated.status as PurchaseOrderEntity['status']) ?? 'ORDERED',
+      subtotal: updated.subtotal.toNumber(),
+      taxAmount: updated.taxAmount.toNumber(),
+      total: updated.total.toNumber(),
+      notes: updated.notes,
+      expectedDate: updated.receivedAt ?? updated.createdAt,
+      receivedAt: updated.receivedAt,
+      createdAt: updated.createdAt,
+      items: updated.items.map((i) => ({
+        id: i.id,
+        orderId: i.orderId,
+        itemId: i.itemId,
+        itemName: i.item.name,
+        quantity: i.quantity,
+        receivedQty: i.receivedQty,
+        cost: i.cost.toNumber(),
+      })),
+    };
+  }
+
+  // ─── Purchase orders (create) ──────────────────────────────────────────────
+  async createPurchaseOrder(
+    tenantId: string,
+    input: CreatePurchaseOrderInput
+  ): Promise<PurchaseOrderEntity> {
+    const supplier = await prisma.supplier.findFirst({
+      where: { tenantId, id: input.supplierId },
+    });
+    if (!supplier) {
+      throw new ApiError(404, 'Proveedor no encontrado');
+    }
+    if (!supplier.isActive) {
+      throw new ApiError(400, 'El proveedor está inactivo');
+    }
+    const branch = await prisma.branch.findFirst({
+      where: { tenantId, id: input.branchId },
+    });
+    if (!branch) {
+      throw new ApiError(404, 'Sucursal no encontrada');
+    }
+
+    // Duplicate lines merge into one (same guard as the receive flow) so the
+    // quantity math below is always consistent.
+    const mergedLines = new Map<string, number>();
+    for (const line of input.items) {
+      if (!Number.isInteger(line.quantity) || line.quantity <= 0) {
+        throw new ApiError(400, 'Cantidad inválida en uno de los productos');
+      }
+      mergedLines.set(
+        line.itemId,
+        (mergedLines.get(line.itemId) ?? 0) + line.quantity
+      );
+    }
+    const lines = [...mergedLines.entries()].map(([itemId, quantity]) => ({
+      itemId,
+      quantity,
+    }));
+
+    const items = await prisma.item.findMany({
+      where: { tenantId, id: { in: lines.map((l) => l.itemId) } },
+    });
+    if (items.length !== lines.length) {
+      throw new ApiError(400, 'Uno o más productos no existen');
+    }
+    const itemById = new Map(items.map((i) => [i.id, i] as const));
+
+    const order = await prisma.$transaction(async (tx) => {
+      // PO value is priced at item cost; tax is extracted inclusively with the
+      // tenant's default rate, mirroring the registerSale money model.
+      const subtotal = lines.reduce((acc, l) => {
+        const item = itemById.get(l.itemId);
+        const cost = item ? item.cost.toNumber() : 0;
+        return acc + cost * l.quantity;
+      }, 0);
+
+      const defaultTax =
+        (await tx.taxRate.findFirst({
+          where: { tenantId, isDefault: true, isActive: true },
+          orderBy: { createdAt: 'asc' },
+        })) ??
+        (await tx.taxRate.findFirst({
+          where: { tenantId, isInclusive: true, isActive: true },
+          orderBy: { createdAt: 'asc' },
+        }));
+      const ratePct = defaultTax?.rate.toNumber() ?? 0;
+      const taxAmount =
+        ratePct > 0 ? Math.round(subtotal * (ratePct / (100 + ratePct)) * 100) / 100 : 0;
+      const total = Math.round(subtotal * 100) / 100;
+
+      // Display-only sequential number (no counter table); orderNumber is not
+      // unique, so a race here is cosmetic, never a consistency risk.
+      const seq = (await tx.purchaseOrder.count({ where: { tenantId } })) + 1;
+      const orderNumber = `PO-${new Date().getFullYear()}-${String(seq).padStart(3, '0')}`;
+
+      return tx.purchaseOrder.create({
+        data: {
+          tenantId,
+          supplierId: supplier.id,
+          branchId: branch.id,
+          orderNumber,
+          status: 'ORDERED',
+          subtotal,
+          taxAmount,
+          total,
+          notes: input.notes ?? null,
+          items: {
+            create: lines.map((l) => ({
+              itemId: l.itemId,
+              quantity: l.quantity,
+              cost: itemById.get(l.itemId)!.cost,
+            })),
+          },
+        },
+        include: {
+          supplier: true,
+          branch: true,
+          items: { include: { item: true } },
+        },
+      });
+    });
+
+    return {
+      id: order.id,
+      tenantId: order.tenantId,
+      supplierId: order.supplierId,
+      supplierName: order.supplier.name,
+      branchId: order.branchId,
+      orderNumber: order.orderNumber,
+      status: (order.status as PurchaseOrderEntity['status']) ?? 'ORDERED',
+      subtotal: order.subtotal.toNumber(),
+      taxAmount: order.taxAmount.toNumber(),
+      total: order.total.toNumber(),
+      notes: order.notes,
+      expectedDate: order.receivedAt ?? order.createdAt,
+      receivedAt: order.receivedAt,
+      createdAt: order.createdAt,
+      items: order.items.map((i) => ({
+        id: i.id,
+        orderId: i.orderId,
+        itemId: i.itemId,
+        itemName: i.item.name,
+        quantity: i.quantity,
+        receivedQty: i.receivedQty,
+        cost: i.cost.toNumber(),
+      })),
+    };
+  }
+
   // ─── Employees ──────────────────────────────────────────────────────────────
   async getEmployees(tenantId: string): Promise<EmployeeEntity[]> {
     const rows = await prisma.employee.findMany({
@@ -406,32 +670,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       orderBy: { createdAt: 'desc' },
     });
 
-    return rows.map((e) => {
-      const meta = (e.person.metadata ?? {}) as EmployeePersonMetadata;
-      return {
-        id: e.id,
-        tenantId: e.tenantId,
-        personId: e.personId,
-        firstName: e.person.firstName,
-        lastName: e.person.lastName,
-        email: e.person.email,
-        phone: e.person.phone,
-        branchId: e.branchId,
-        role: e.position,
-        department: meta.department ?? null,
-        salary: e.salary?.toNumber() ?? null,
-        commissionRate: meta.commissionRate ?? null,
-        hireDate: e.hireDate,
-        isActive: e.isActive,
-        createdAt: e.createdAt,
-        person: {
-          firstName: e.person.firstName,
-          lastName: e.person.lastName,
-          email: e.person.email,
-          phone: e.person.phone,
-        },
-      };
-    });
+    return rows.map((e) => this.toEmployeeEntity(e));
   }
 
   async createEmployee(
@@ -489,6 +728,177 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     };
   }
 
+  /**
+   * Shared employee PATCH path: applies field updates on the Person (with the
+   * department/commissionRate JSONB metadata merged) and the Employee row in
+   * one transaction. With `linkPin`, it also upserts the Person's User with a
+   * bcrypt-hashed POS PIN (`role: STAFF`), and with `isActive: false` it
+   * hard-revokes the User's `posPinHash` in the same transaction.
+   */
+  private async applyEmployeeUpdate(
+    tenantId: string,
+    employeeId: string,
+    input: UpdateEmployeeInput,
+    linkPin: boolean
+  ): Promise<EmployeeEntity> {
+    const pin = linkPin ? String(input.pin ?? '') : '';
+    if (linkPin && !/^\d{4,6}$/.test(pin)) {
+      throw new ApiError(400, 'Pin inválido');
+    }
+    // bcrypt is CPU-bound: hash before opening the transaction (the writes
+    // themselves stay atomic inside it).
+    const posPinHash = linkPin ? await hashPassword(pin) : null;
+    const newUserPasswordHash = linkPin
+      ? await hashPassword(randomUUID())
+      : null;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const employee = await tx.employee.findFirst({
+        where: { tenantId, id: employeeId },
+        include: { person: true },
+      });
+      if (!employee) {
+        throw new ApiError(404, 'Empleado no encontrado');
+      }
+
+      if (input.branchId !== undefined && input.branchId !== null) {
+        const branch = await tx.branch.findFirst({
+          where: { tenantId, id: input.branchId },
+        });
+        if (!branch) {
+          throw new ApiError(404, 'Sucursal no encontrada');
+        }
+      }
+      if (linkPin && employee.isActive === false) {
+        throw new ApiError(400, 'No se puede asignar un PIN a un empleado inactivo');
+      }
+
+      // Person fields follow PATCH semantics: undefined = untouched, null = clear.
+      const personData: Prisma.PersonUpdateInput = {};
+      if (input.firstName !== undefined) personData.firstName = input.firstName;
+      if (input.lastName !== undefined) personData.lastName = input.lastName;
+      if (input.email !== undefined) personData.email = input.email;
+      if (input.phone !== undefined) personData.phone = input.phone;
+
+      const currentMeta = (employee.person.metadata ?? {}) as EmployeePersonMetadata;
+      personData.metadata = {
+        department:
+          input.department === undefined
+            ? currentMeta.department ?? null
+            : input.department,
+        commissionRate:
+          input.commissionRate === undefined
+            ? currentMeta.commissionRate ?? null
+            : input.commissionRate ?? null,
+      };
+      await tx.person.update({
+        where: { id: employee.personId },
+        data: personData,
+      });
+
+      const employeeData: Prisma.EmployeeUncheckedUpdateInput = {};
+      if (input.role !== undefined) employeeData.position = input.role;
+      if (input.salary !== undefined) employeeData.salary = input.salary;
+      if (input.hireDate !== undefined) employeeData.hireDate = input.hireDate;
+      if (input.isActive !== undefined) employeeData.isActive = input.isActive;
+      if (input.branchId !== undefined) employeeData.branchId = input.branchId;
+
+      // Deactivate → hard-revoke the POS PIN (spec: "marked inactive, no
+      // longer selectable"; the PIN credential dies with the role).
+      if (input.isActive === false) {
+        await tx.user.updateMany({
+          where: {
+            tenantId,
+            personId: employee.personId,
+            posPinHash: { not: null },
+          },
+          data: { posPinHash: null },
+        });
+      }
+
+      if (linkPin) {
+        // User.email: the Person's email when it is free inside the tenant,
+        // otherwise a synthetic per-person address (link-only accounts never
+        // sign in by email+password — passwordHash is a random nonce).
+        const emailForUser =
+          employee.person.email &&
+          !(await tx.user.findFirst({
+            where: {
+              tenantId,
+              email: employee.person.email,
+              personId: { not: employee.personId },
+            },
+          }))
+            ? employee.person.email
+            : `${employee.personId}@pos.local`;
+
+        await tx.user.upsert({
+          where: { personId: employee.personId },
+          update: { posPinHash },
+          create: {
+            tenantId,
+            personId: employee.personId,
+            email: emailForUser,
+            passwordHash: newUserPasswordHash!,
+            posPinHash,
+            role: 'STAFF',
+          },
+        });
+      }
+
+      return tx.employee.update({
+        where: { id: employee.id },
+        data: employeeData,
+        include: { person: true },
+      });
+    });
+
+    return this.toEmployeeEntity(updated);
+  }
+
+  private toEmployeeEntity(e: EmployeeWithPerson): EmployeeEntity {
+    const meta = (e.person.metadata ?? {}) as EmployeePersonMetadata;
+    return {
+      id: e.id,
+      tenantId: e.tenantId,
+      personId: e.personId,
+      firstName: e.person.firstName,
+      lastName: e.person.lastName,
+      email: e.person.email,
+      phone: e.person.phone,
+      branchId: e.branchId,
+      role: e.position,
+      department: meta.department ?? null,
+      salary: e.salary?.toNumber() ?? null,
+      commissionRate: meta.commissionRate ?? null,
+      hireDate: e.hireDate,
+      isActive: e.isActive,
+      createdAt: e.createdAt,
+      person: {
+        firstName: e.person.firstName,
+        lastName: e.person.lastName,
+        email: e.person.email,
+        phone: e.person.phone,
+      },
+    };
+  }
+
+  async updateEmployee(
+    tenantId: string,
+    employeeId: string,
+    input: UpdateEmployeeInput
+  ): Promise<EmployeeEntity> {
+    return this.applyEmployeeUpdate(tenantId, employeeId, input, false);
+  }
+
+  async linkEmployeeUser(
+    tenantId: string,
+    employeeId: string,
+    input: UpdateEmployeeInput
+  ): Promise<EmployeeEntity> {
+    return this.applyEmployeeUpdate(tenantId, employeeId, input, true);
+  }
+
   // ─── Cash ───────────────────────────────────────────────────────────────────
   async getOpenCashSession(tenantId: string): Promise<CashSessionEntity | null> {
     const session = await prisma.cashSession.findFirst({
@@ -540,10 +950,19 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     tenantId: string,
     input: OpenCashSessionInput
   ): Promise<CashSessionEntity> {
+    // Single open-session guard: a second OPEN session for the tenant is a
+    // conflict (409); the routes surface this code as-is.
+    const alreadyOpen = await prisma.cashSession.findFirst({
+      where: { tenantId, status: 'OPEN' },
+    });
+    if (alreadyOpen) {
+      throw new ApiError(409, 'Ya existe una sesión de caja abierta');
+    }
+
     const branch =
       (await firstBranchOfTenant(tenantId, input.branchId || undefined)) ?? null;
     if (!branch) {
-      throw new Error('El tenant no tiene sucursales configuradas');
+      throw new ApiError(400, 'El tenant no tiene sucursales configuradas');
     }
 
     const session = await prisma.cashSession.create({
@@ -606,20 +1025,53 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     input: CloseCashSessionInput
   ): Promise<CashSessionEntity> {
     const session = await prisma.cashSession.findFirst({
-      where: { id: input.sessionId, tenantId, status: 'OPEN' },
+      where: { id: input.sessionId, tenantId },
+      include: { movements: true },
     });
     if (!session) {
-      throw new Error('Sesión de caja no encontrada o ya cerrada');
+      throw new ApiError(404, 'Sesión de caja no encontrada');
     }
+    if (session.status !== 'OPEN') {
+      throw new ApiError(409, 'La sesión de caja ya está cerrada');
+    }
+
+    // Server-side money: expected = opening + Σmovements(IN−OUT) + Σsales −
+    // Σreturns; the difference against the physical count is derived here.
+    // Client-sent expectedAmount/difference are never read (the contract only
+    // accepts the physical count).
+    const [salesAgg, returnsAgg] = await Promise.all([
+      prisma.sale.aggregate({
+        where: { tenantId, cashSessionId: session.id },
+        _sum: { total: true },
+      }),
+      prisma.saleReturn.aggregate({
+        where: { tenantId, cashSessionId: session.id },
+        _sum: { totalRefund: true },
+      }),
+    ]);
+
+    const movementsNet = session.movements.reduce(
+      (acc, m) =>
+        m.type === 'IN' ? acc + m.amount.toNumber() : acc - m.amount.toNumber(),
+      0
+    );
+    const salesTotal = salesAgg._sum.total?.toNumber() ?? 0;
+    const returnsTotal = returnsAgg._sum.totalRefund?.toNumber() ?? 0;
+    const expectedAmount =
+      Math.round(
+        (session.openingAmount.toNumber() + movementsNet + salesTotal - returnsTotal) * 100
+      ) / 100;
+    const physicalCount = input.physicalCount;
+    const difference = Math.round((physicalCount - expectedAmount) * 100) / 100;
 
     const updated = await prisma.cashSession.update({
       where: { id: session.id },
       data: {
         status: 'CLOSED',
         closedAt: new Date(),
-        closingAmount: input.closingAmount,
-        expectedAmount: input.expectedAmount,
-        difference: input.difference,
+        closingAmount: physicalCount,
+        expectedAmount,
+        difference,
       },
     });
 
@@ -636,8 +1088,16 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       difference: updated.difference?.toNumber() ?? null,
       status: (updated.status as CashSessionEntity['status']) ?? 'CLOSED',
       notes: updated.notes,
-      movements: [],
-      salesTotal: 0,
+      movements: session.movements.map((m) => ({
+        id: m.id,
+        tenantId: m.tenantId,
+        sessionId: m.sessionId,
+        type: m.type as 'IN' | 'OUT',
+        amount: m.amount.toNumber(),
+        concept: m.concept,
+        createdAt: m.createdAt,
+      })),
+      salesTotal,
     };
   }
 
@@ -803,6 +1263,75 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     };
   }
 
+  // ─── Invoicing / CAI config ────────────────────────────────────────────────
+  async getInvoicingConfig(tenantId: string): Promise<InvoicingConfigEntity | null> {
+    const config = await prisma.invoicingConfig.findUnique({
+      where: { tenantId },
+    });
+    return config ? this.toInvoicingConfigEntity(config) : null;
+  }
+
+  async updateInvoicingConfig(
+    tenantId: string,
+    input: UpdateInvoicingConfigInput
+  ): Promise<InvoicingConfigEntity> {
+    const updateData: Prisma.InvoicingConfigUpdateInput = {
+      ...(input.caiNumber !== undefined ? { caiNumber: input.caiNumber } : {}),
+      ...(input.rangeFrom !== undefined ? { rangeFrom: input.rangeFrom } : {}),
+      ...(input.rangeTo !== undefined ? { rangeTo: input.rangeTo } : {}),
+      ...(input.limitDate !== undefined ? { limitDate: input.limitDate } : {}),
+      ...(input.companyTaxId !== undefined
+        ? { companyTaxId: input.companyTaxId }
+        : {}),
+      ...(input.legalName !== undefined ? { legalName: input.legalName } : {}),
+    };
+    // All five CAI fields are required by the PUT schema, so an upsert-create
+    // with only scalars fully satisfies InvoicingConfigCreateInput.
+    const createData: Prisma.InvoicingConfigUncheckedCreateInput = {
+      tenantId,
+      caiNumber: input.caiNumber ?? '',
+      rangeFrom: input.rangeFrom ?? '',
+      rangeTo: input.rangeTo ?? '',
+      ...(input.limitDate !== undefined ? { limitDate: input.limitDate } : {}),
+      companyTaxId: input.companyTaxId ?? '',
+      legalName: input.legalName ?? '',
+    };
+
+    const config = await prisma.invoicingConfig.upsert({
+      where: { tenantId },
+      update: updateData,
+      create: createData,
+    });
+
+    return this.toInvoicingConfigEntity(config);
+  }
+
+  private toInvoicingConfigEntity(config: {
+    id: string;
+    tenantId: string;
+    caiNumber: string;
+    rangeFrom: string;
+    rangeTo: string;
+    limitDate: Date | null;
+    companyTaxId: string;
+    legalName: string;
+    createdAt: Date;
+    updatedAt: Date;
+  }): InvoicingConfigEntity {
+    return {
+      id: config.id,
+      tenantId: config.tenantId,
+      caiNumber: config.caiNumber,
+      rangeFrom: config.rangeFrom,
+      rangeTo: config.rangeTo,
+      limitDate: config.limitDate,
+      companyTaxId: config.companyTaxId,
+      legalName: config.legalName,
+      createdAt: config.createdAt,
+      updatedAt: config.updatedAt,
+    };
+  }
+
   // ─── Sales (POS) ────────────────────────────────────────────────────────────
   async findCustomers(
     tenantId: string,
@@ -836,18 +1365,83 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     }));
   }
 
+  async createCustomer(
+    tenantId: string,
+    input: CreateCustomerInput
+  ): Promise<CustomerLight> {
+    const created = await prisma.person.create({
+      data: {
+        tenantId,
+        firstName: input.firstName,
+        lastName: input.lastName,
+        documentId: input.documentId ?? null,
+        email: input.email ?? null,
+        phone: input.phone ?? null,
+      },
+    });
+
+    return this.toCustomerLight(created);
+  }
+
+  async updateCustomer(
+    tenantId: string,
+    customerId: string,
+    input: UpdateCustomerInput
+  ): Promise<CustomerLight> {
+    // Customers are Persons without an Employee record; employee persons are
+    // never editable through the customers surface (tenant-scoped, 404).
+    const existing = await prisma.person.findFirst({
+      where: { tenantId, id: customerId, employee: null },
+    });
+    if (!existing) {
+      throw new ApiError(404, 'Cliente no encontrado');
+    }
+
+    const data: Prisma.PersonUpdateInput = {};
+    if (input.firstName !== undefined) data.firstName = input.firstName;
+    if (input.lastName !== undefined) data.lastName = input.lastName;
+    if (input.documentId !== undefined) data.documentId = input.documentId;
+    if (input.email !== undefined) data.email = input.email;
+    if (input.phone !== undefined) data.phone = input.phone;
+
+    const updated = await prisma.person.update({
+      where: { id: customerId },
+      data,
+    });
+
+    return this.toCustomerLight(updated);
+  }
+
+  private toCustomerLight(p: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    documentId: string | null;
+    email: string | null;
+    phone: string | null;
+  }): CustomerLight {
+    return {
+      id: p.id,
+      firstName: p.firstName,
+      lastName: p.lastName,
+      documentId: p.documentId,
+      email: p.email,
+      phone: p.phone,
+    };
+  }
+
   async registerSale(
     tenantId: string,
     input: RegisterSaleInput
   ): Promise<SaleEntity> {
     if (!input.lines.length) {
-      throw new Error('La venta no tiene productos');
+      throw new ApiError(400, 'La venta no tiene productos');
     }
 
     const mergedLines = new Map<string, number>();
     for (const line of input.lines) {
       if (line.quantity <= 0 || !Number.isInteger(line.quantity)) {
-        throw new Error('Cantidad inválida en uno de los productos');
+        throw new ApiError(400, 'Cantidad inválida en uno de los productos');
       }
       mergedLines.set(
         line.itemId,
@@ -863,7 +1457,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       where: { tenantId, status: 'OPEN' },
     });
     if (!openSession) {
-      throw new Error('Debe abrir la caja antes de registrar una venta');
+      throw new ApiError(400, 'Debe abrir la caja antes de registrar una venta');
     }
     const branchId = openSession.branchId;
 
@@ -871,7 +1465,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       where: { tenantId, id: { in: lines.map((l) => l.itemId) } },
     });
     if (items.length !== lines.length) {
-      throw new Error('Uno o más productos no existen');
+      throw new ApiError(400, 'Uno o más productos no existen');
     }
     const itemById = new Map(items.map((i) => [i.id, i] as const));
 
@@ -881,7 +1475,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         where: { tenantId, id: input.personId },
         select: { firstName: true, lastName: true },
       });
-      if (!customer) throw new Error('Cliente no encontrado');
+      if (!customer) throw new ApiError(404, 'Cliente no encontrado');
     }
 
     const defaultTax =
@@ -907,6 +1501,19 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       const taxAmount = taxRatePct > 0 ? base * (taxRatePct / (100 + taxRatePct)) : 0;
       const total = base;
 
+      // Server-side money: only the tendered amount is client input; the
+      // balance is derived here and the receivable decision follows from it.
+      const paidAmount = input.paidAmount ?? total;
+      const balance = Math.max(0, Math.round((total - paidAmount) * 100) / 100);
+      if (balance > 0 && !input.personId) {
+        throw new ApiError(
+          400,
+          'Las ventas a crédito requieren un cliente asociado'
+        );
+      }
+
+      // Stock: decrement only when the branch has enough; otherwise 409 and the
+      // whole transaction rolls back (nothing is written).
       for (const line of lines) {
         const result = await tx.inventory.updateMany({
           where: {
@@ -919,12 +1526,16 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         });
         if (result.count === 0) {
           const item = itemById.get(line.itemId);
-          throw new Error(
+          throw new ApiError(
+            409,
             `Stock insuficiente para "${item?.name ?? 'producto'}"`
           );
         }
       }
 
+      // Fiscal continuity: the SaleCounter upsert+increment lives inside the
+      // sale transaction, so INV numbers never restart nor collide. After the
+      // seed (lastNumber 16) the first real sale is INV-…-000017.
       const counter = await tx.saleCounter.upsert({
         where: { tenantId },
         update: { lastNumber: { increment: 1 } },
@@ -941,7 +1552,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         counter.lastNumber
       ).padStart(6, '0')}`;
 
-      return tx.sale.create({
+      const created = await tx.sale.create({
         data: {
           tenantId,
           personId: input.personId ?? null,
@@ -950,6 +1561,9 @@ export class PrismaDistributionRepository implements IDistributionRepository {
           taxAmount,
           discount,
           total,
+          paymentMethod: input.paymentMethod,
+          paidAmount,
+          balance,
           invoiceNumber,
           notes: input.notes ?? null,
           status: 'COMPLETED',
@@ -966,6 +1580,24 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         },
         include: { items: { include: { item: true } } },
       });
+
+      // Credit / partial payment: a receivable opens only when a balance
+      // remains after the tender; same transaction, so it always matches the
+      // sale it belongs to.
+      if (balance > 0) {
+        await tx.receivable.create({
+          data: {
+            tenantId,
+            saleId: created.id,
+            personId: input.personId!,
+            originalAmount: balance,
+            balance,
+            status: 'OPEN',
+          },
+        });
+      }
+
+      return created;
     });
 
     return {
@@ -980,6 +1612,9 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       taxAmount: saleResult.taxAmount.toNumber(),
       discount: saleResult.discount.toNumber(),
       total: saleResult.total.toNumber(),
+      paymentMethod: saleResult.paymentMethod as PaymentMethod,
+      paidAmount: saleResult.paidAmount.toNumber(),
+      balance: saleResult.balance.toNumber(),
       invoiceNumber: saleResult.invoiceNumber,
       status: saleResult.status,
       createdAt: saleResult.createdAt,
@@ -1016,6 +1651,9 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       taxAmount: s.taxAmount.toNumber(),
       discount: s.discount.toNumber(),
       total: s.total.toNumber(),
+      paymentMethod: s.paymentMethod as PaymentMethod,
+      paidAmount: s.paidAmount.toNumber(),
+      balance: s.balance.toNumber(),
       invoiceNumber: s.invoiceNumber,
       status: s.status,
       createdAt: s.createdAt,

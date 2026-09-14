@@ -1,39 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTenantId } from '@/lib/session';
+import { requireApiAuth, requireTenantId } from '@/lib/session';
+import { ApiError, handleApiError } from '@/lib/api-error';
+import { closeCashSessionSchema } from '@/core/schemas/distribution';
 import { PrismaDistributionRepository } from '@/infrastructure/db/repositories/prisma-distribution.repository';
 
 const repository = new PrismaDistributionRepository();
 
 export async function POST(request: NextRequest) {
-  const tenantId = await requireTenantId();
-  if (!tenantId) {
-    return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
-  }
-
   try {
-    const body = await request.json();
-    if (!body.sessionId || typeof body.closingAmount !== 'number') {
-      return NextResponse.json(
-        { error: 'sessionId y closingAmount son obligatorios' },
-        { status: 400 }
-      );
+    await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
+    const tenantId = await requireTenantId();
+    if (!tenantId) throw new ApiError(401, 'No autorizado');
+
+    const body: unknown = await request.json();
+    const direct = closeCashSessionSchema.safeParse(body);
+
+    let closeInput: { sessionId: string; physicalCount: number };
+    if (direct.success) {
+      closeInput = direct.data;
+    } else {
+      // Legacy bridge: current UI still posts closingAmount/expectedAmount/difference.
+      // Only sessionId + the physical count are honored; fabricated values are dropped.
+      const record = (body ?? {}) as Record<string, unknown>;
+      const legacy = closeCashSessionSchema.safeParse({
+        sessionId: record.sessionId,
+        physicalCount: record.closingAmount,
+      });
+      if (!legacy.success) throw new ApiError(400, 'Datos inválidos');
+      closeInput = legacy.data;
     }
 
+    // Server-side expected/difference derivation replaces this in P0; the client
+    // never controls them here (only the physical count is trusted).
     const session = await repository.closeCashSession(tenantId, {
-      sessionId: String(body.sessionId),
-      closingAmount: body.closingAmount,
-      expectedAmount:
-        typeof body.expectedAmount === 'number' ? body.expectedAmount : body.closingAmount,
-      difference: typeof body.difference === 'number' ? body.difference : 0,
+      sessionId: closeInput.sessionId,
+      physicalCount: closeInput.physicalCount,
     });
 
     return NextResponse.json(session);
   } catch (error) {
-    console.error('[cash/close]', error);
-    const message =
-      error instanceof Error && error.message.includes('Sesión de caja')
-        ? error.message
-        : 'Error al cerrar la caja';
-    return NextResponse.json({ error: message }, { status: 400 });
+    return handleApiError(error);
   }
 }

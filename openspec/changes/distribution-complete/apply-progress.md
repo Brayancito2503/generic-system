@@ -1,61 +1,221 @@
-# Apply Progress: distribution-complete — S1 F0 Environment (PR #1)
+# Apply Progress: distribution-complete — S1 F0 (PR #1) + S2 Security Foundation (PR #2) + S3a/S3b P0 data layer (PR #3)
 
 - **Change**: distribution-complete
-- **Batch**: 1 — Phase 1 S1 F0 Environment, tasks 1.1 + 1.2 only
-- **Mode**: Standard (no test runner configured; gate = lint / typecheck / build + `git check-ignore` + `.husky/_` presence)
-- **Chain**: feature-branch-chain — PR #1 base = tracker `feat/distribution-complete`; this batch lives on child branch `feat/distribution-complete-01-f0`
-- **PR boundary**: start = tracker baseline `1353c10`; end = `36b1f59` on the child branch (do NOT open the PR from apply)
+- **Batch 1**: Phase 1 S1 F0 Environment, tasks 1.1 + 1.2 (PR #1, branch `feat/distribution-complete-01-f0`)
+- **Batch 2**: Phase 2 S2 Security Foundation, tasks 2.1–2.7 (PR #2, branch `feat/distribution-complete-02-security`, base = PR #1 branch)
+- **Batch 3**: Phase 3 S3a (P0 data layer), tasks 3.1 + 3.2 (PR #3, branch `feat/distribution-complete-03-p0`, base = PR #2 branch)
+- **Batch 4**: Phase 3 S3b (P0 repo transaction logic + seed continuity), tasks 3.3 + 3.4 (PR #3, branch `feat/distribution-complete-03-p0`) — this report
+- **Mode**: Standard (no test runner configured; gate = lint / typecheck / build + grep guards + `prisma generate`)
+- **Chain**: feature-branch-chain — PR #1 base = tracker `feat/distribution-complete`; PR #2 base = PR #1 branch; PR #3 base = PR #2 branch; only tracker merges to main. Do NOT open PRs from apply.
+
+## Task 2.1 EARLY GATE — Verdict: PASS
+
+Grep across `src/` (`requireApiAuth`, `roles`, role arrays, route handlers in `src/app/api/**/route.ts`, `SUPER_ADMIN`, `.role`, `UnauthorizedError`):
+
+| Search | Result |
+|---|---|
+| `requireApiAuth` | Exactly 1 match — the definition `src/lib/session.ts:34`. **ZERO consumers** (no call sites anywhere in `src/`) |
+| `roles.includes` / `role ===` / `role !==` | Only the definition's own `roles.includes(session.role)` check inside `requireApiAuth`; no inline role-denial logic in any route handler |
+| `SUPER_ADMIN` | Only the `SessionRole` type literal in `src/lib/session-token.ts:6` |
+| `.role` in route handlers | `auth/me` echoes `session.role`; `employees` POST maps a UI form field `role` (employee position string, not a session role check); `login` writes `user.role` into the session. None perform role-list denial |
+| `requireTenantId` in routes | 14 distribution routes use it for tenant scoping only (401 on null); it never rejects by role |
+
+Consumer inventory (exhaustive): no route, middleware, or lib imports or calls `requireApiAuth([...])` today; there is no strict-role-list denial behavior anywhere in the codebase. Extending `requireApiAuth` so `SUPER_ADMIN` satisfies any roles list is purely additive (it only short-circuits the existing `roles.includes` check for SUPER_ADMIN; other roles behave identically) and cannot regress a consumer, because no consumer exists yet — 2.5–2.7 proceeded.
+
+## Work Unit Evidence — S3b P0 repo transaction logic + seed continuity (batch 4)
+
+| Evidence | Required value |
+|---|---|
+| Focused test command and exact result | `npx prisma generate` → exit 0 (no-op success, schema unchanged this batch); `npm run lint` → exit 0 (0 errors 0 warnings); `npm run typecheck` → exit 0 (`tsc --noEmit` clean — includes `prisma/seed.ts` via tsconfig `**/*.ts`); `npm run build` → exit 0 (Next.js 16.3.4 production build, 17/17 routes). Per-commit hooks re-ran lint + typecheck on each of the 4 code commits (all exit 0) |
+| Runtime harness command/scenario and exact result | N/A as runtime: no DB-backed smoke was authorized for S3b (DB is READ-ONLY this batch; `db:seed`/`migrate dev` NOT run). The DB-backed smoke (seed → `SaleCounter.lastNumber === 16` → first real sale `INV-…-000017`; dup-open → 409; over-receive → 409) is the S5 gate per design Testing Strategy, under user supervision with DB backup |
+| Rollback boundary | Revert the 4 code commits of batch 4 independently: `feat(distribution)` sale flow (repo file), `feat(distribution)` PO receive (repo + port), `feat(distribution)` cash open/close (repo file), `feat(db)` seed (`prisma/seed.ts`). All are self-contained per-behavior slices on top of S3a; seed revert leaves the historical FAC-* sales untouched |
+
+## Work Unit Evidence — S3a P0 data layer (batch 3)
+
+| Evidence | Required value |
+|---|---|
+| Focused test command and exact result | `npx prisma generate` → exit 0 (Prisma Client v5.22.0 generated; schema validated); `npm run lint` → exit 0 (0 errors 0 warnings); `npm run typecheck` → exit 0 (`tsc --noEmit` clean); `npm run build` → exit 0 (Next production build, 17/17 routes incl. all 14 `/api/distribution/**`) |
+| Runtime harness command/scenario and exact result | N/A as runtime: DDL is delivered as a documented migration file + regenerated client; apply to a real DB is manual and supervised (backup first — proposal F0 spec, design Migration/Rollout). DB-backed smoke (sale → `INV-…-000017`, server-side close, 409s) is the S5 gate per design Testing Strategy |
+| Rollback boundary | Revert the 3 commits of PR #3: (1) schema+migration (`prisma/schema.prisma`, `prisma/migrations/20260912120000_distribution_complete/`), (2) entities+ports+consumer adaptation (`src/core/entities/distribution.ts`, `src/core/ports/distribution-repository.port.ts`, `src/infrastructure/db/repositories/prisma-distribution.repository.ts` close/sale-mapping lines, `src/app/api/distribution/cash/close/route.ts`, `src/app/api/distribution/sales/route.ts`), (3) `chore(sdd)` task-marking (`tasks.md`, `apply-progress.md`). Clean revert without touching S1/S2 files; migration file is new, so a revert leaves zero DB DDL in the repo |
 
 ## Work Unit Evidence
 
 | Evidence | Required value |
 |---|---|
-| Focused test command and exact result | `git check-ignore .env.local .env.production` → exit 0, both matched by `.gitignore:34:.env*`; `npm run lint` → exit 0; `npm run typecheck` → exit 0; `npm run build` → exit 0 (Next 16.3.4 production build, 17/17 static pages generated, `next.config.ts` evaluated in 2.4s) |
-| Runtime harness command/scenario and exact result | `npm run prepare` (husky v9) → regenerated `.husky/_` shims; `Test-Path .husky/_` → `True`. Commit hooks now fire: `pre-commit` ran `npm run lint` + `npm run typecheck` on each commit (passed); `commit-msg` ran `commitlint --edit` via commitlint config-conventional (passed) |
-| Rollback boundary | Revert commit `b07103b` (`.gitignore` only) and/or `36b1f59` (`next.config.ts` only) independently; `.next` deletion is local-only (dir is gitignored; rebuild restores it); `.husky/_` regenerated by `npm run prepare`. No other files touched |
+| Focused test command and exact result | `npm run lint` → exit 0 (no errors, no warnings); `npm run typecheck` → exit 0 (`tsc --noEmit` clean); `npm run build` → exit 0 (Next production build; 17/17 dynamic `ƒ` routes incl. all 14 `/api/distribution/**`); grep guard per route (see Verification Evidence) |
+| Runtime harness command/scenario and exact result | N/A as runtime: no DB-backed smoke was authorized for S2 (P0/P1 seeded smoke is the S5 gate per design Testing Strategy); route behavior is exercised via the grep guard + build compilation of all handlers. Legacy-client compatibility was verified statically against view payloads (`CashRegisterView` close payload; `SalesPOSView` sale payload; `SuppliersView`/`EmployeesView` optional-field empty strings; `SalesHistoryView` `limit=200`; POS `/tax` rate reads) |
+| Rollback boundary | Revert the 4 code commits of PR #2 independently per unit: `chore(deps)` (package.json + package-lock.json), `feat(security)` schemas+api-error+i18n (`src/core/schemas/*`, `src/lib/api-error.ts`, `src/lib/session.ts` ForbiddenError, `messages/*`), `feat(auth)` (`src/lib/session.ts` SUPER_ADMIN line + `src/app/api/auth/me/route.ts`), `feat(security)` routes (14 files under `src/app/api/distribution/`). The whole PR reverts cleanly without touching S1 files or schema/DB |
 
 ## Tasks Status
 
-### Phase 1 — S1 F0 Environment
+### Phase 1 — S1 F0 Environment (batch 1, PR #1)
 
 - [x] 1.1 `.gitignore` M: ignore all `.env*` except `!.env.example`; verify `git check-ignore` on `.env.local`/`.env.production` [S1]
 - [x] 1.2 `next.config.ts` M: remove `turbopack:{root}` hack + OneDrive comment; delete stale `.next`; `npm run prepare` → regenerates `.husky/_`; gates lint + typecheck + build [S1]
 
+### Phase 2 — S2 Security Foundation (batch 2, PR #2)
+
+- [x] 2.1 Open question — SUPER_ADMIN passthrough (early): verdict PASS, consumer inventory above [S2a]
+- [x] 2.2 `package.json` M: direct `zod ^3.25.76` added (matched the transitive `zod@3.25.76` in the tree); `npm install` → tree deduped onto top-level `zod@3.25.76`, 0 vulnerabilities; `npm ls zod` shows top-level `zod@3.25.76` [S2a]
+- [x] 2.3 `src/core/schemas/tenant.ts` C + `src/core/schemas/distribution.ts` C: Zod input schemas for customer (create/update), purchase-order (+ receive), employee (optional PIN `^\d{4,6}$`, hashed server-side in P0), supplier (create/update), inventory ops (branchId-scoped update schema + negative cost/price/stock guards), sale (`paymentMethod` CASH/CARD/TRANSFER/CREDIT, `paidAmount`, `balance`), cash-close (`sessionId` + `physicalCount` only), invoicing/CAI config, tenant settings, pagination (`page`/`limit` 1..100), plus `idParamSchema`, `noQueryParamsSchema`, `customerSearchQuerySchema`, `salesListQuerySchema`; zero `any`; core imports core only [S2a]
+- [x] 2.4 `src/lib/api-error.ts` C: `ApiError` (400/401/403/404/409) + `handleApiError` mapping ZodError/SyntaxError → 400, `UnauthorizedError` → 401, `ForbiddenError` → 403, legacy repo-message map (Stock insuficiente→409, SKU dup→409, `no encontrad*`→404, Sesión de caja / sale-guard msgs→400) with Spanish user-facing messages; `errors.*` keys added to BOTH `messages/es.json` and `messages/en.json` [S2a]
+- [x] 2.5 `src/lib/session.ts` M: `requireApiAuth` short-circuits `SUPER_ADMIN` past any roles list (additive; other roles unchanged); new `ForbiddenError` (403) distinct from `UnauthorizedError` (401) [S2a]
+- [x] 2.6 `src/app/api/auth/me/route.ts` M: response now includes `tenant { name, modules }` read server-side from the session's `tenantId` (never from client); wrapped in `handleApiError` [S2a]
+- [x] 2.7 All 14 `src/app/api/distribution/**/route.ts` M: every handler runs `requireTenantId` + `requireApiAuth(role)` + Zod `safeParse` (400 malformed) + `handleApiError`; role matrix below [S2b]
+
+Role matrix (verified against `specs/distribution-access-control` + per-capability specs; POS operational = STAFF/TENANT_ADMIN, config-management = TENANT_ADMIN; SUPER_ADMIN passes everything via 2.5):
+
+| Route | Handler(s) | Roles |
+|---|---|---|
+| `dashboard/route.ts` GET | STAFF, TENANT_ADMIN | POS operational read |
+| `inventory/route.ts` GET+POST | STAFF, TENANT_ADMIN | POS operational |
+| `inventory/[id]/route.ts` PATCH | STAFF, TENANT_ADMIN | POS operational |
+| `customers/route.ts` GET | STAFF, TENANT_ADMIN | customers spec scenario: STAFF creates/edits customers |
+| `employees/route.ts` GET+POST | STAFF, TENANT_ADMIN | POS operational |
+| `suppliers/route.ts` GET+POST | STAFF, TENANT_ADMIN | POS operational |
+| `purchase-orders/route.ts` GET | STAFF, TENANT_ADMIN | POS operational |
+| `sales/route.ts` GET+POST | STAFF, TENANT_ADMIN | POS operational |
+| `cash/route.ts` GET+POST | STAFF, TENANT_ADMIN | POS operational (open 409 lands in P0) |
+| `cash/close/route.ts` POST | STAFF, TENANT_ADMIN | POS operational (server-side compute lands in P0) |
+| `cash/movements/route.ts` POST | STAFF, TENANT_ADMIN | POS operational |
+| `tax/route.ts` GET | STAFF, TENANT_ADMIN | GET = operational read (POS fetches rates to compute invoice tax); POST = TENANT_ADMIN (config mutation — access-control scenario STAFF→403) |
+| `tax/[id]/route.ts` PATCH+DELETE | TENANT_ADMIN | config mutation (STAFF→403) |
+| `tax/summary/route.ts` GET | TENANT_ADMIN | fiscal reporting on the tax/CAI admin surface; not consumed by any STAFF flow |
+
+### Phase 3 — S3 P0 (sale-blocking) (batches 3+4: S3a + S3b)
+
+- [x] 3.1 `prisma/schema.prisma` M + `prisma/migrations/20260912120000_distribution_complete/migration.sql` C: additive DDL — Sale.paymentMethod/paidAmount/balance (nullable-agnostic: `NOT NULL DEFAULT` so existing rows survive), PurchaseOrderItem.receivedQty, InvoicingConfig (tenantId `@unique`, 1 per tenant), Receivable + ReceivablePayment, SaleReturn + SaleReturnItem; `@@unique([tenantId, invoiceNumber])` on Sale verified ALREADY present (migration 20260910070000_invoice_correlative), NOT re-applied; `npx prisma generate` → exit 0 [S3a]
+- [x] 3.2 `src/core/entities/distribution.ts` M: `PaymentMethod`/`ReceivableStatus` unions, SaleEntity.paymentMethod/paidAmount/balance, PurchaseOrderItemEntity.receivedQty, InvoicingConfigEntity, ReceivableEntity, ReceivablePaymentEntity, SaleReturnEntity, SaleReturnItemEntity, `PaginatedResult<T>` {items/page/limit/hasMore}; `src/core/ports/distribution-repository.port.ts` M: `CloseCashSessionInput {sessionId, physicalCount}` (expected/difference no longer client input), `RegisterSaleInput.paymentMethod/paidAmount`, input contracts CreateCustomer/UpdateCustomer/CreatePurchaseOrder/ReceivePurchaseOrder/UpdateEmployee/UpdateInvoicingConfig; NO `any` [S3a]
+- [x] 3.3 `src/infrastructure/db/repositories/prisma-distribution.repository.ts` M: `registerSale` now runs the FULL server-side money in one `$transaction` — stock decrement (`updateMany` with `stock >= qty` guard → `ApiError(409, 'Stock insuficiente…')`), SaleCounter upsert+increment (`INV-YYYYMMDD-######`, next after seed 16 → first real sale `INV-…-000017`), Sale + items with PERSISTED `paymentMethod/paidAmount/balance`, and `Receivable` opened in the same tx when `balance > 0` (credit sales require a customer → `ApiError(400)`); all throws are now typed `ApiError` (400 malformed / 404 missing customer / 409 stock). `openCashSession` gains the single-open-session guard (`ApiError(409, 'Ya existe una sesión de caja abierta')`). `closeCashSession` computes server-side `expected = opening + Σmovements(IN−OUT) + Σsales − Σreturns` and `difference = physicalCount − expected` (client expected/difference never read; returns persist the derived values as `closingAmount/expectedAmount/difference`). NEW `receivePurchaseOrder` (port method shipped with impl): 404 cross-tenant, 409 over-receive (`quantity − receivedQty` guard), inventory increment + `receivedQty` update + ORDERED → RECEIVED when complete, all in one `$transaction` — greps: `$transaction` at repo lines 873/910/1072, SaleCounter upsert at 1119–1123, close derivation at 774–779 [S3b]
+- [x] 3.4 Open question — SaleCounter continuity: `prisma/seed.ts` M: upsert `SaleCounter { update: { lastNumber: 16 }, create: { lastNumber: 16 } }` AFTER the 16 `FAC-*` sales (seed lines 371–379; sales untouched at 352–369), items added to the 3 seeded POs (PO-001 fully received / PO-002 pending / PO-003 partially received → receive smoke can complete it), default `InvoicingConfig` row (upsert, seed lines 381–392), plus defensive `deleteMany` coverage for the new tables; verified against current schema by `tsc --noEmit`; seed NOT run (DB read-only this batch) [S3b]
+- [ ] 3.5 Routes: `src/app/api/distribution/tax/config/route.ts` C GET/PUT TENANT_ADMIN+Zod; `customers/route.ts` M POST; `customers/[id]/route.ts` C PATCH; `purchase-orders/route.ts` M POST; `purchase-orders/[id]/receive/route.ts` C POST (409 over-receive) [S3c]
+- [ ] 3.6 Open question — employee→User PIN link: `employees/[id]/route.ts` C PATCH/deactivate + User link (upsert User: personId = employee.personId, bcrypt(PIN) → posPinHash, role STAFF, same tx); `cash/route.ts` M open-409; `cash/close/route.ts` M physicalCount-only server close [S3c]
+- [x] 3.7 Views: `TaxAndInvoicingView.tsx` M (server CAI, drop fake local state + hardcoded `000-001-01-00001249`), `CashRegisterView.tsx` M, `CustomersView.tsx` C, `EmployeesView.tsx` M, `SuppliersView.tsx` M (PO create/receive), `DistributionModuleApp.tsx` M (customers tab); i18n es+en [S3d]
+
 ### Pending (not part of this batch)
 
-- [ ] 2.1–2.7 Phase 2 S2 Security Foundation [S2a/S2b]
-- [ ] 3.1–3.7 Phase 3 S3 P0 (sale-blocking) [S3a–S3d]
 - [ ] 4.1–4.4 Phase 4 S4 P1 (100%) [S4a–S4d]
 - [ ] 5.1–5.5 Phase 5 S5 Base Shell + Admin [S5a/S5b]
 
-## Verification Evidence
-
-All commands run on branch `feat/distribution-complete-01-f0` after edits, `.next` deletion, and `npm run prepare`:
+## Verification Evidence (branch `feat/distribution-complete-03-p0`, post-edits)
 
 | Command | Result |
 |---|---|
-| `git check-ignore -v .env.local .env.production` | `.gitignore:34:.env*` matched both; exit 0 |
-| `Test-Path .husky/_` | `True` |
-| `npm run lint` | exit 0 (eslint clean) |
+| `npx prisma generate` | exit 0 — Prisma Client v5.22.0 generated in 272ms; schema validated (first attempt EPERM on `query_engine-windows.dll.node` caused by a running `next dev` tree; user authorized killing that tree — `taskkill /PID 29948 /T /F` — then generate succeeded) |
+| `npm run lint` | exit 0 (eslint clean, 0 errors 0 warnings) |
+| `npm run typecheck` | exit 0 (`tsc --noEmit` clean; includes the new client types + P0 entity/port contracts) |
+| `npm run build` | exit 0; Next.js 16.3.4 production build; 17/17 routes compiled incl. all 14 `/api/distribution/**` |
+| Grep proof schema | `paymentMethod`/`paidAmount`/`balance` on Sale, `receivedQty` on PurchaseOrderItem, models InvoicingConfig/Receivable/ReceivablePayment/SaleReturn/SaleReturnItem all present in `prisma/schema.prisma`; `@@unique([tenantId, invoiceNumber])` present (pre-existing, line 173) |
+| Grep proof migration | `prisma/migrations/20260912120000_distribution_complete/migration.sql`: 4× `ADD COLUMN` (paymentMethod/paidAmount/balance/receivedQty), 5× `CREATE TABLE` (InvoicingConfig, Receivable, ReceivablePayment, SaleReturn, SaleReturnItem), `CREATE UNIQUE INDEX "InvoicingConfig_tenantId_key"`, FKs + tenant indexes; **zero** `DROP`/`DELETE FROM`/`TRUNCATE`/`ALTER COLUMN` (additive-only audit clean) |
+| `git status --porcelain` | `M` schema.prisma, cash/close route, sales route, entities, ports, repo; `?? prisma/migrations/20260912120000_distribution_complete/` (staged in commit 1); only `?? openspec/changes/distribution-complete/{proposal.md, design.md, specs/}` untracked (= expected OpenSpec trail, never staged with code) |
+
+| Command | Result |
+|---|---|
+| `npm ls zod` | top-level `zod@3.25.76`; whole tree deduped onto it (eslint-config-next + shadcn subtrees now `deduped` to 3.25.76); 0 vulnerabilities |
+| `npm run lint` | exit 0 (eslint clean, 0 errors 0 warnings) |
 | `npm run typecheck` | exit 0 (`tsc --noEmit` clean) |
-| `npm run build` | exit 0; compiled successfully; 17/17 static pages; routes served as expected |
-| `git status --porcelain` | Only `M .gitignore`, `M next.config.ts` (pre-commit); `?? openspec/` untracked (expected — OpenSpec trail, never staged with code) |
+| `npm run build` | exit 0; production build; all 14 `/api/distribution/**` routes compiled as dynamic `ƒ` routes |
+| Grep guard (14 routes) | `requireApiAuth` + `safeParse` + `requireTenantId` + `handleApiError` present in every one of the 14 `route.ts` files (per-route table; `[id]` paths checked with `-LiteralPath` — PowerShell `[id]` is a glob character class otherwise) |
+| 2.1 verdict | **PASS** — zero role-list consumers; extending `requireApiAuth` is additive |
+| `git status --porcelain` | `M src/core/schemas/distribution.ts` resolved via amend of the routes commit (see Deviations); only `?? openspec/changes/distribution-complete/{proposal.md, design.md, specs/}` untracked (= expected OpenSpec trail, never staged with code) |
 
 ## Deviations from Design
 
-None — implementation matches design S1 exactly (`.gitignore` `.env*` + `!.env.example`; `next.config.ts` hack/comment removed keeping valid config; `.husky/_` regenerated; stale `.next` deleted).
+### Batch 4 (S3b)
+
+1. **Credit-sale customer guard (content, spec-safe)**: `Receivable.personId` is `NOT NULL` in the S3a schema, so a `balance > 0` sale without a customer cannot open a receivable. The batch enforces `ApiError(400, 'Las ventas a crédito requieren un cliente asociado')` inside the sale transaction (rolls back everything) instead of silently skipping the receivable. The design's "Receivable if balance > 0" holds whenever a customer is attached; walk-in credit is rejected with a clear message.
+2. **`receivePurchaseOrder` status vocabulary**: the schema comment lists PO statuses `PENDING | RECEIVED | CANCELLED` while the entity also declares `ORDERED` and the design's data flow uses ORDERED → RECEIVED. Since `PurchaseOrder.status` is a free `String` (no DB enum), receive accepts `PENDING | ORDERED` and advances to `RECEIVED` when complete (partial keeps `ORDERED`), matching the design; a `CANCELLED` PO is rejected with 409.
+3. **Commit split by behavior (process)**: the repo file changes were staged hunk-by-hunk (`git add -p`) into 3 cohesive work-unit commits (sale flow / PO receive / cash open+close) instead of one blob commit; each commit passed the husky lint+typecheck hooks and compiles standalone. Port declaration for `receivePurchaseOrder` shipped in the same commit as its Prisma implementation (per prior deviation 2 of batch 3).
+
+### Batch 3 (S3a)
+
+1. **Port contract vs. concrete repo (forced type-compat adaptations)**: changing `CloseCashSessionInput` to `{sessionId, physicalCount}` and adding required `SaleEntity.paymentMethod/paidAmount/balance` broke the concrete repo + 2 route call sites at the type level (`PrismaDistributionRepository implements IDistributionRepository`). To keep `typecheck`/`build` green WITHOUT implementing S3b logic, minimal behavior-preserving adaptations landed in this batch: repo `closeCashSession` stores `physicalCount` as `closingAmount` AND `expectedAmount` with `difference: 0` (byte-identical to the S2 route bridge it replaces), repo `registerSale` maps `paymentMethod/paidAmount/balance` from input (paidAmount defaults to total, balance clamped ≥ 0), repo `getSales` maps the new DB columns directly, and the `cash/close` route passes the new input shape while `sales` route passes `paymentMethod/paidAmount` through. Full server-side close math, the sale transaction and receivable creation remain task 3.3.
+2. **Interface method signatures deferred to 3.3**: `IDistributionRepository` gains input contracts (types) in this batch but NOT new method declarations (e.g. `getInvoicingConfig`, `createCustomer`, `receivePurchaseOrder`). Adding unimplemented methods now would break `tsc`/build until the S3b repo implementation lands; methods ship with their Prisma implementations in 3.3. Design's S3 ports line says "input contracts", which is what this batch delivers.
+3. **`Sale.paymentMethod` cast in `getSales`**: DB column is TEXT; mapped with `as PaymentMethod` (same pattern as existing `status` casts). Fine for the P0 contract; the P1 route + Zod enum already constrain writes.
+4. **Migration naming**: `<ts>` = `20260912120000` (later than all existing migrations 20260909–20260910). `@@unique([tenantId, invoiceNumber])` was ALREADY present (satisfied by the 20260910070000 migration), so the new migration documents it in a comment instead of re-applying (re-applying would fail on a real DB).
+
+### Batch 2 (S2)
+
+1. **`idParamSchema` amend (process)**: the export feeding the two `[id]` routes was initially left unstaged from the routes commit; since the branch is local and unpushed, commit `50271db` was amended (`--no-edit`) to include `src/core/schemas/distribution.ts` so the routes work unit typechecks standalone. Hooks re-ran (lint + typecheck passed). No code content changed beyond the one export line.
+2. **Legacy error bridge in `handleApiError` (content)**: the repository still throws plain `Error` with Spanish messages (P0 task 3.3 replaces them with typed `ApiError`). `handleApiError` maps the exact current messages so existing 409/404/400 semantics survive the route migration; a side normalization is that `Producto no encontrado`/`Cliente no encontrado`/`Tasa de impuesto no encontrada` now map to 404 (design: "404 not-found") where `tax DELETE` previously returned 400 — frontend displays the same Spanish message either way.
+3. **Status-code normalization**: `ForbiddenError` (role mismatch) returns 403 instead of the previous blanket 401 — required by the design's 400/401/403/404/409 contract and by the access-control spec ("STAFF → 403"). Zero consumers existed before, so nothing regressed.
+4. **`cash/close` legacy key bridge (content)**: schema per design is `{sessionId, physicalCount}` only; the current `CashRegisterView` still posts `closingAmount/expectedAmount/difference`, so the S2 route accepts the legacy `closingAmount` key as the physical count and **drops** client `expectedAmount/difference` entirely (server stores `physicalCount` as both `closingAmount` and `expectedAmount`, `difference: 0` — byte-identical to today's honest UI which sends `closingAmount === expectedAmount`). Full server-side derivation replaces this in P0 (task 3.6) when the UI switches to `physicalCount`.
+5. **`branchId` in inventory update schema**: `updateInventoryItemSchema` includes optional `branchId` per task 2.3, but the route drops it when calling the repository; the multi-branch `updateInventoryItem` fix is P1 (task 4.2). Forward-compatible contract, no behavior change today.
+6. **GET query validation**: GET endpoints with no parameters validate against `noQueryParamsSchema` (strict-empty) and `sales` GET against a legacy `limit` 1..500 schema (the `take 500` cap; 1..100 pagination is P1 per spec `distribution-pagination`). This satisfies "safeParse per route" honestly without breaking `SalesHistoryView?limit=200`.
 
 ## Issues Found
 
-None.
+- **Batch 4**: None blocking. DB stays untouched (no `db:seed`, no `migrate dev`); the seeded smoke (counter continuity, dup-open 409, over-receive 409) remains the S5 gate under user supervision with DB backup.
+
+- **Environment lock (resolved)**: the first `npx prisma generate` failed with `EPERM: rename query_engine-windows.dll.node` because a `next dev` server was running and held the Prisma engine DLL memory-mapped (Windows). The dev server tree was stopped (`taskkill /PID 29948 /T /F` after user authorization), then `prisma generate` succeeded. The dev server must be restarted to pick up the regenerated client + new schema.
+- None blocking for S2. Compatibility reads confirmed: `SuppliersView`/`EmployeesView` send `''` for optional fields → `nullableEmail`/`nullableText` accept and preserve empty strings (no regression); `SalesPOSView` sale payload unchanged (payment fields optional); POS `/tax` GET stays STAFF-accessible so STAFF checkout tax computation is unaffected.
 
 ## Workload / PR Boundary
 
-- Mode: chained PR slice (feature-branch-chain; `delivery_strategy` = ask-on-risk, user-resolved → chained PRs)
-- Current work unit: S1 F0 env — commits `b07103b` + `36b1f59` on `feat/distribution-complete-01-f0`
-- Boundary: PR #1 base = `feat/distribution-complete` (tracker, draft/no-merge); later PRs base = immediate previous PR branch; only tracker merges to main
-- Estimated review budget impact: ~24 changed lines (1+1 `.gitignore`; 8+14 `next.config.ts`) — far below the 400-line budget
+- Mode: chained PR slice #3 (feature-branch-chain; PR #3 base = `feat/distribution-complete-02-security`; tracker `feat/distribution-complete`; later PRs base = immediate previous PR branch)
+- Current work unit: S3b P0 repo transaction logic + seed continuity — new commits on `feat/distribution-complete-03-p0`: `feat(distribution)` sale flow, `feat(distribution)` PO receive, `feat(distribution)` cash open/close, `feat(db)` seed, `chore(sdd)` task-marking
+- Boundary: start = S3a tip `46098e7`; end = the `chore(sdd)` commit on `feat/distribution-complete-03-p0` (do NOT open the PR from apply)
+- Estimated review budget impact: ~320 authored lines across the 5 commits (repo ~170, port ~5, seed ~86, chore ~60); S3b units stay inside the work-unit slice (repo split across 3 behavior commits per deviation 3)
+
+## Batch 5 (S3c) — routes: tax/config, customers, POs, employees, POS login
+
+### Verification (Batch 5)
+
+| Command | Result |
+|---|---|
+| `npm run lint` | exit 0 (eslint clean, 0 errors 0 warnings) |
+| `npm run typecheck` | exit 0 (`tsc --noEmit` clean; new route files + 7 repo methods typecheck) |
+| `npm run build` | exit 0; Next.js 16.3.4 production build; new routes compiled `ƒ`: `/api/auth/pos-login`, `/api/distribution/tax/config`, `/api/distribution/customers/[id]`, `/api/distribution/purchase-orders/[id]/receive`, `/api/distribution/employees/[id]` (full route table lists 27 app routes) |
+| Grep proof port | `linkEmployeeUser` (port line 227) + `createCustomer/updateCustomer/createPurchaseOrder/updateEmployee/getInvoicingConfig/updateInvoicingConfig` all declared in `IDistributionRepository` and implemented in the Prisma adapter |
+| Grep proof deactivate | `data: { posPinHash: null }` revoke inside the same transaction as `isActive: false` (repo line 815) |
+| Grep proof 409s | receive over-quantity/cancelled (repo 462/433), cash dup-open `Ya existe una sesión de caja abierta` (repo 959), cash close already-closed (1035) — all pass through `handleApiError` untouched; receive route asserts it (line 26) |
+| `git status --porcelain` | clean of code changes after commit 6; only `?? openspec/changes/distribution-complete/{proposal.md, design.md, specs/}` untracked (= expected OpenSpec trail, never staged with code) |
+
+### Deviations from Design (Batch 5)
+
+1. **`POST /api/auth/pos-login` added (user-approved supplement, beyond tasks.md)**: tenant-scoped PIN login `{ tenant: slug, pin, employeeId? }`, token/cookie mechanics cloned from `/api/auth/login` (jose HS256 `gs_session`). Scoped to the tenant by slug and to `role: STAFF` users with a stored `posPinHash` AND an active linked Employee. Unlike the legacy POS mode in `/api/auth/login` (which brute-forces every user with a PIN across ALL tenants — a tenant leak), this route cannot cross tenants. `errors.posLogin` added to both message files.
+2. **Employment POST + PIN wiring (2 lines)**: task 3.6 only names the PATCH route, but the create schema already validated `pin` ("wired to the User link in P0"); the POST now calls `linkEmployeeUser` after create when a PIN was sent. The link runs in its own transaction — a link failure leaves the employee created (retryable), documented in the route.
+3. **Cash routes: verify-only, no code change**: the 409 open-session mapping and physicalCount-only server close already shipped in S2 (legacy `closingAmount` bridge kept until S3d UI switch). Task 3.6's cash items are satisfied by the existing commits (`488b683`, `757595f`); nothing extra was needed.
+4. **`PurchaseOrder.expectedDate` documented as not persisted**: the entity exposes an `expectedDate` field and the create/receive flows compute it (`receivedAt ?? createdAt`), but the S3a schema has no `expectedDate` column; client input is accepted by the schema and ignored at the repo boundary (noted in the repo comment). No DDL added — if a real expected-date column is wanted later it is a small additive migration.
+5. **`orderNumber` is display-only**: created as `PO-<year>-<seq>` where seq = `count + 1` inside the create transaction (no counter table, no unique constraint — matches the pre-existing seed/`SaleCounter` discussion; a cosmetic race is acceptable and documented in code). The purchase-order spec does not require uniqueness.
+6. **POST employees is two transactions (create, then link-user)**: the link itself is transactional (upsert User with bcrypt PIN + nonce password); the create is intentionally NOT merged into it, keeping `linkEmployeeUser`'s UPDATE semantics (404 if the employee does not exist) intact for the PATCH route.
+7. **Commit split (process)**: 5 behavior commits + 1 chore; each passed husky hooks (lint + typecheck run per commit). Commit 5 (`feat(auth)`) includes both the route and the es/en i18n keys so the work unit is self-contained. One commit-msg hook rejection (header >100 chars) was fixed by shortening the subject (same content); `subject-case` rule requires a lowercase subject start (matches prior commits).
+
+### Workload / PR Boundary (Batch 5)
+
+- Current work unit: S3c routes — new commits on `feat/distribution-complete-03-p0`: `7183e50` repo contracts P0, `05f2a82` tax config + customers, `ea5a73e` PO create + receive, `da7ed57` employee PATCH + POST pin, `cd5061b` auth pos-login + i18n, + `chore(sdd)` task-marking (this batch)
+- Boundary: start = S3b tip `db4e9df`; end = the `chore(sdd)` commit on `feat/distribution-complete-03-p0` (do NOT open the PR from apply)
+- Estimated review budget impact: ~620 authored lines across the 6 commits (port ~80, repo ~330, schemas ~5, routes ~180, i18n ~14, chore ~25); units stay inside the work-unit slice (repo layer ships as one behavior commit, routes split by feature)
+
+## Batch 6 (S3d) — views: tax CAI, cash close, customers, employees, suppliers, shell tab
+
+### Verification (Batch 6)
+
+| Command | Result |
+|---|---|
+| `npm run lint` | exit 0 on every commit (husky pre-commit, 6 behavior commits; the first attempt failed on `react-hooks/set-state-in-effect` and was fixed by refactoring, see deviation 1) |
+| `npm run typecheck` | exit 0 on every commit (`tsc --noEmit` clean; view files + `api.ts` write-union extension typecheck) |
+| `npm run build` | exit 0; Next.js production build after unit 6 (all routes compiled, no errors) |
+| Grep proof CAI | zero matches for `000-001-01-00001249` in `src/` — hardcoded CAI dropped; `TaxAndInvoicingView` reads server values from GET `/tax/config` (404 → null → "not configured" state) |
+| Grep proof close | `physicalCount` is the ONLY client-sent close field (`apiSend('/cash/close', 'POST', { sessionId, physicalCount })`); `closingAmount`/`expectedAmount`/`difference` appear only as server-derived display values in the closed summary banner, never in the payload |
+| Grep proof shell | `customers` in the `DistributionTab` union, navItems with `Contact` icon, render block and `CustomersView` import all present in `DistributionModuleApp.tsx` |
+| i18n parity check | 211 unique `t(...)` keys across the 6 view files — ALL resolve in BOTH `messages/es.json` and `messages/en.json` (scripted walk; first run reported false negatives due to a checker scope-path bug, fixed by splitting the `useTranslations` scope on `.`) |
+| `git status --porcelain` | clean of code changes after commit 6; only `?? openspec/changes/distribution-complete/{proposal.md, design.md, specs/}` untracked (= expected OpenSpec trail, never staged with code) |
+
+### Deviations from Design (Batch 6)
+
+1. **`react-hooks/set-state-in-effect` (content)**: the initial tax refactor failed lint because `setCaiForm(...)` ran synchronously in a `useEffect` body. Fixed with the remount-by-key pattern: `CaiConfigForm` accepts an `initial` prop, rendered as `<CaiConfigForm key={serverConfig?.id ?? 'creating'} initial={...} />`; the effect was removed entirely. Same rule kept every rewritten view free of state-in-effect.
+2. **`api.ts` write-union needs `PUT`**: `apiSend`'s method union was `'POST'|'PATCH'|'DELETE'`; the tax-config route is `PUT` (shipped S3c). Extended to `'POST'|'PATCH'|'PUT'|'DELETE'` — additive, no call-site changes.
+3. **No branch endpoint exists (content)**: PO create requires `branchId` but no branch-listing API exists. `SuppliersView` derives it from server data: first PO's `branchId`, else the open cash session's `branchId`; submit is disabled with a hint when neither exists (cannot happen while a cash session is open). Additionally, GET `/purchase-orders` returns orders WITHOUT `items` while create/receive POST responses include them → the view caches `knownItems: Record<poId, PurchaseOrderItemEntity[]>` from POST responses and falls back to an inventory picker for receive lines; the server still enforces remaining-qty with 409.
+4. **i18n scope discipline (process)**: every hardcoded Spanish string removed from the rewritten views is now keyed and added in BOTH locales, so the app renders fully in EN too (previously several views mixed `t()` with raw Spanish strings). All keys follow the existing namespace layout: `distributionModule.*` direct keys, `distributionModule.tax.*` / `distributionModule.employees.*` / `distributionModule.suppliers.*` via nested `useTranslations` scopes, and the new `customers.*` block inserted before `"inventory"`.
+5. **Commit split by view (process)**: 6 behavior commits + this chore, one view domain per commit (tax / cash / customers / employees / suppliers / shell tab), each passing husky lint+typecheck (work-unit convention from batches 4–5). i18n keys ship inside the same commit as the view using them so each unit is self-contained.
+
+### Workload / PR Boundary (Batch 6)
+
+- Current work unit: S3d views — new commits on `feat/distribution-complete-03-p0`: `533337c` tax CAI, `65717c1` cash close physicalCount, `10bf666` customers view, `3b7cc1a` employees edit/PIN/deactivate, `c6b8c8b` PO create/receive, `f5deb31` customers tab shell, + `chore(sdd)` task-marking (this batch)
+- Boundary: start = S3c chore tip `4639384`; end = the `chore(sdd)` commit on `feat/distribution-complete-03-p0` (do NOT open the PR from apply)
+- Estimated review budget impact: ~1,790 authored lines across the 7 commits (tax ~450, cash ~130, customers ~320, employees ~570, suppliers ~710, shell ~7, chore ~30 — deltas; includes i18n key blocks both locales in each view commit); units stay inside the work-unit slice (one view domain per commit)
 
 ## Status
 
-2/25 tasks complete (S1 F0 env done). Ready for next batch: S2 Security Foundation (tasks 2.1–2.7) on its own child PR branch.
+16/25 tasks complete (S1 + S2 + S3a + S3b + S3c + S3d: tasks 1.1–1.2, 2.1–2.7, 3.1–3.7; plus user-approved `POST /api/auth/pos-login`). Phase 3 (P0, sale-blocking) fully closed. Ready for next batch: S4 (task 4.1–4.4 — sales payment/returns, receivables, suppliers/inventory maintenance, real dashboard trends, POS/dashboard/inventory/history views + i18n) on a new branch `feat/distribution-complete-04-p1` (base = P0 tip; do NOT open the PR from apply).

@@ -8,7 +8,9 @@ import type {
   DistributionDashboardStats,
   EmployeeEntity,
   FiscalSummary,
+  InvoicingConfigEntity,
   InventoryStockItem,
+  PaymentMethod,
   PurchaseOrderEntity,
   SaleEntity,
   SupplierEntity,
@@ -72,9 +74,82 @@ export interface AddCashMovementInput {
 
 export interface CloseCashSessionInput {
   sessionId: string;
-  closingAmount: number;
-  expectedAmount: number;
-  difference: number;
+  /**
+   * Only the physical count is client input; expectedAmount/difference are
+   * computed server-side from movements and sales (never trusted from client).
+   */
+  physicalCount: number;
+}
+
+// ─── P0 contracts: customers ────────────────────────────────────────────────
+
+export interface CreateCustomerInput {
+  firstName: string;
+  lastName: string;
+  email?: string | null;
+  phone?: string | null;
+  documentId?: string | null;
+}
+
+export interface UpdateCustomerInput {
+  firstName?: string;
+  lastName?: string;
+  email?: string | null;
+  phone?: string | null;
+  documentId?: string | null;
+}
+
+// ─── P0 contracts: purchase orders (create + receive) ───────────────────────
+
+export interface PurchaseOrderLineInput {
+  itemId: string;
+  quantity: number;
+}
+
+export interface CreatePurchaseOrderInput {
+  supplierId: string;
+  branchId: string;
+  items: PurchaseOrderLineInput[];
+  notes?: string | null;
+  expectedDate?: Date;
+}
+
+export interface ReceivePurchaseOrderLineInput {
+  itemId: string;
+  quantity: number;
+}
+
+export interface ReceivePurchaseOrderInput {
+  receivedItems: ReceivePurchaseOrderLineInput[];
+}
+
+// ─── P0 contracts: employees (update / deactivate / POS PIN link) ───────────
+
+export interface UpdateEmployeeInput {
+  firstName?: string;
+  lastName?: string;
+  email?: string | null;
+  phone?: string | null;
+  branchId?: string | null;
+  role?: string;
+  department?: string | null;
+  salary?: number | null;
+  commissionRate?: number | null;
+  hireDate?: Date;
+  isActive?: boolean;
+  /** POS PIN (4-6 digits); hashed server-side when linking the User. */
+  pin?: string;
+}
+
+// ─── P0 contracts: invoicing / CAI config ───────────────────────────────────
+
+export interface UpdateInvoicingConfigInput {
+  caiNumber?: string;
+  rangeFrom?: string;
+  rangeTo?: string;
+  limitDate?: Date | null;
+  companyTaxId?: string;
+  legalName?: string;
 }
 
 export interface CreateTaxRateInput {
@@ -102,6 +177,9 @@ export interface RegisterSaleInput {
   discount: number;
   personId?: string | null;
   notes?: string | null;
+  paymentMethod: PaymentMethod;
+  /** Amount tendered/paid at sale time; balance = total - paidAmount (server-side). */
+  paidAmount?: number;
 }
 
 export interface IDistributionRepository {
@@ -119,8 +197,38 @@ export interface IDistributionRepository {
   getSuppliers(tenantId: string): Promise<SupplierEntity[]>;
   createSupplier(tenantId: string, input: CreateSupplierInput): Promise<SupplierEntity>;
   getPurchaseOrders(tenantId: string): Promise<PurchaseOrderEntity[]>;
+  createPurchaseOrder(
+    tenantId: string,
+    input: CreatePurchaseOrderInput
+  ): Promise<PurchaseOrderEntity>;
+  receivePurchaseOrder(
+    tenantId: string,
+    poId: string,
+    input: ReceivePurchaseOrderInput
+  ): Promise<PurchaseOrderEntity>;
   getEmployees(tenantId: string): Promise<EmployeeEntity[]>;
   createEmployee(tenantId: string, input: CreateEmployeeInput): Promise<EmployeeEntity>;
+  /**
+   * PATCH semantics: undefined fields are left untouched; null clears nullable
+   * fields. When `isActive: false` is applied, the linked User's `posPinHash`
+   * is hard-revoked in the same transaction (deactivated employees never keep
+   * a live PIN credential).
+   */
+  updateEmployee(
+    tenantId: string,
+    employeeId: string,
+    input: UpdateEmployeeInput
+  ): Promise<EmployeeEntity>;
+  /**
+   * Links (or re-links) the employee's Person to a `User` with a bcrypt-hashed
+   * POS PIN (`role: STAFF`) in the same transaction that applies any other
+   * employee fields; requires `input.pin` (`^\d{4,6}$`).
+   */
+  linkEmployeeUser(
+    tenantId: string,
+    employeeId: string,
+    input: UpdateEmployeeInput
+  ): Promise<EmployeeEntity>;
   getOpenCashSession(tenantId: string): Promise<CashSessionEntity | null>;
   openCashSession(
     tenantId: string,
@@ -144,6 +252,17 @@ export interface IDistributionRepository {
   deleteTaxRate(tenantId: string, rateId: string): Promise<void>;
   getFiscalSummary(tenantId: string): Promise<FiscalSummary>;
   findCustomers(tenantId: string, query?: string): Promise<CustomerLight[]>;
+  createCustomer(tenantId: string, input: CreateCustomerInput): Promise<CustomerLight>;
+  updateCustomer(
+    tenantId: string,
+    customerId: string,
+    input: UpdateCustomerInput
+  ): Promise<CustomerLight>;
+  getInvoicingConfig(tenantId: string): Promise<InvoicingConfigEntity | null>;
+  updateInvoicingConfig(
+    tenantId: string,
+    input: UpdateInvoicingConfigInput
+  ): Promise<InvoicingConfigEntity>;
   registerSale(tenantId: string, input: RegisterSaleInput): Promise<SaleEntity>;
   getSales(tenantId: string, limit?: number): Promise<SaleEntity[]>;
 }

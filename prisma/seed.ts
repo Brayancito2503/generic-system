@@ -49,6 +49,13 @@ const taxRates = [
 async function main() {
   console.log('Limpiando datos previos del seed...');
   await prisma.saleItem.deleteMany({});
+  await prisma.saleReturnItem.deleteMany({});
+  await prisma.saleReturn.deleteMany({});
+  await prisma.receivablePayment.deleteMany({});
+  await prisma.receivable.deleteMany({});
+  await prisma.saleCounter.deleteMany({});
+  await prisma.invoicingConfig.deleteMany({});
+  await prisma.purchaseOrderItem.deleteMany({});
   await prisma.cashMovement.deleteMany({});
   await prisma.sale.deleteMany({});
   await prisma.cashSession.deleteMany({});
@@ -82,7 +89,7 @@ async function main() {
   });
 
   console.log(`Creando ${products.length} productos e inventario...`);
-  const itemRecords: { id: string; price: number; name: string }[] = [];
+  const itemRecords: { id: string; price: number; name: string; cost: number }[] = [];
   for (const p of products) {
     const item = await prisma.item.create({
       data: {
@@ -99,7 +106,7 @@ async function main() {
     await prisma.inventory.create({
       data: { tenantId: tenant.id, itemId: item.id, branchId: branch.id, stock: p.stock, minAlert: p.minAlert },
     });
-    itemRecords.push({ id: item.id, price: p.price, name: p.name });
+    itemRecords.push({ id: item.id, price: p.price, name: p.name, cost: p.cost });
   }
 
   console.log('Creando proveedores...');
@@ -126,8 +133,9 @@ async function main() {
     { index: 1, orderNumber: 'PO-2026-002', status: 'PENDING', subtotal: 16000.0, taxAmount: 2400.0, total: 18400.0, receivedAt: null, notes: 'Despacho programado para el viernes' },
     { index: 2, orderNumber: 'PO-2026-003', status: 'ORDERED', subtotal: 10869.57, taxAmount: 1630.43, total: 12500.0, receivedAt: new Date('2026-09-08T09:30:00Z'), notes: 'En tránsito desde bodega de distribución' },
   ];
+  const purchaseOrderRecords: { id: string }[] = [];
   for (const po of poDefinitions) {
-    await prisma.purchaseOrder.create({
+    const created = await prisma.purchaseOrder.create({
       data: {
         tenantId: tenant.id,
         supplierId: supplierRecords[po.index].id,
@@ -141,6 +149,56 @@ async function main() {
         receivedAt: po.receivedAt ?? new Date(),
       },
     });
+    purchaseOrderRecords.push(created);
+  }
+
+  console.log('Asociando ítems a las órdenes de compra...');
+  // Items make the receive flow work: PO-001 fully received (historical),
+  // PO-002 pending (receivedQty 0), PO-003 partially received so the smoke can
+  // complete the remaining quantities and advance ORDERED → RECEIVED.
+  const poItems = [
+    {
+      poIndex: 0,
+      lines: [
+        { itemIndex: 1, quantity: 80, receivedQty: 80 }, // ARR-001
+        { itemIndex: 2, quantity: 60, receivedQty: 60 }, // AZU-001
+        { itemIndex: 0, quantity: 100, receivedQty: 100 }, // ACE-001
+        { itemIndex: 3, quantity: 30, receivedQty: 30 }, // FRJ-001
+        { itemIndex: 8, quantity: 20, receivedQty: 20 }, // CAF-001
+      ],
+    },
+    {
+      poIndex: 1,
+      lines: [
+        { itemIndex: 4, quantity: 200, receivedQty: 0 }, // LEC-001
+        { itemIndex: 9, quantity: 100, receivedQty: 0 }, // SPG-001
+        { itemIndex: 5, quantity: 250, receivedQty: 0 }, // SAL-001
+        { itemIndex: 7, quantity: 40, receivedQty: 0 }, // JBN-001
+        { itemIndex: 6, quantity: 14, receivedQty: 0 }, // DET-001
+      ],
+    },
+    {
+      poIndex: 2,
+      lines: [
+        { itemIndex: 3, quantity: 25, receivedQty: 25 }, // FRJ-001
+        { itemIndex: 1, quantity: 20, receivedQty: 10 }, // ARR-001
+        { itemIndex: 0, quantity: 40, receivedQty: 20 }, // ACE-001
+        { itemIndex: 8, quantity: 15, receivedQty: 0 }, // CAF-001
+      ],
+    },
+  ];
+  for (const { poIndex, lines } of poItems) {
+    for (const line of lines) {
+      await prisma.purchaseOrderItem.create({
+        data: {
+          orderId: purchaseOrderRecords[poIndex].id,
+          itemId: itemRecords[line.itemIndex].id,
+          quantity: line.quantity,
+          receivedQty: line.receivedQty,
+          cost: itemRecords[line.itemIndex].cost,
+        },
+      });
+    }
   }
 
   console.log('Creando empleados (Person + Employee)...');
@@ -310,6 +368,30 @@ async function main() {
   await addSale(6, 10, [[0, 5], [1, 3]], customerRecords[0].id);
   await addSale(6, 15, [[2, 6], [7, 1], [8, 1]]);
 
+  console.log('Sincronizando continuidad fiscal...');
+  // Continuity: the 16 historical FAC-* sales above leave the counter at 16,
+  // so the first real invoice continues as INV-YYYYMMDD-000017 (no restart at
+  // 000001, no collision with FAC-*). The counter lives in the same Sale model
+  // family the sale transaction increments.
+  await prisma.saleCounter.upsert({
+    where: { tenantId: tenant.id },
+    update: { lastNumber: 16 },
+    create: { tenantId: tenant.id, lastNumber: 16 },
+  });
+  await prisma.invoicingConfig.upsert({
+    where: { tenantId: tenant.id },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      caiNumber: '000-001-01-00000017',
+      rangeFrom: '00000017',
+      rangeTo: '00001000',
+      limitDate: new Date('2026-12-31T23:59:59-06:00'),
+      companyTaxId: 'J0310000012345',
+      legalName: 'Distribuidora San José S.A.',
+    },
+  });
+
   console.log('Seed completado:');
   console.log(`  - Tenant: ${tenant.slug}`);
   console.log(`  - Branch: ${branch.name}`);
@@ -318,6 +400,7 @@ async function main() {
   console.log(`  - Empleados: ${employees.length} | Clientes: ${customerRecords.length}`);
   console.log(`  - Tasas de impuesto: ${taxRates.length}`);
   console.log('  - Sesión de caja abierta + ventas de 7 días');
+  console.log('  - SaleCounter: 16 → próxima factura INV-…-000017 + CAI config por defecto');
   console.log('  - Usuarios demo: admin@distribuidora-sanjose.com / Admin123!');
   console.log('  - Usuario POS: cajero@distribuidora-sanjose.com / PIN 1234');
 }

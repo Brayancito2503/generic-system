@@ -49,6 +49,10 @@ model Tenant {
   cashSessions  CashSession[]
   taxRates      TaxRate[]
   saleCounters  SaleCounter[]
+  invoicingConfig InvoicingConfig?
+  receivables   Receivable[]
+  receivablePayments ReceivablePayment[]
+  saleReturns   SaleReturn[]
 }
 
 model Branch {
@@ -99,6 +103,7 @@ model Person {
   sales         Sale[]
   gymMembership GymMembership?
   employee      Employee?
+  receivables   Receivable[]
 
   @@index([tenantId])
   @@index([tenantId, documentId])
@@ -120,6 +125,7 @@ model Item {
   inventory          Inventory[]
   saleItems          SaleItem[]
   purchaseOrderItems PurchaseOrderItem[]
+  saleReturnItems    SaleReturnItem[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])
@@ -150,12 +156,17 @@ model Sale {
   taxAmount     Decimal  @db.Decimal(10, 2) @default(0)
   discount      Decimal  @db.Decimal(10, 2) @default(0)
   total         Decimal  @db.Decimal(10, 2)
+  paymentMethod String   @default("CASH") // CASH | CARD | TRANSFER | CREDIT
+  paidAmount    Decimal  @db.Decimal(10, 2) @default(0)
+  balance       Decimal  @db.Decimal(10, 2) @default(0)
   invoiceNumber String
   notes         String?
   status        String   @default("COMPLETED")
   createdAt     DateTime @default(now())
 
-  items SaleItem[]
+  items      SaleItem[]
+  receivables Receivable[]
+  returns    SaleReturn[]
 
   @@index([tenantId])
   @@index([cashSessionId])
@@ -260,13 +271,14 @@ model PurchaseOrder {
 }
 
 model PurchaseOrderItem {
-  id       String        @id @default(uuid())
-  orderId  String
-  order    PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  itemId   String
-  item     Item          @relation(fields: [itemId], references: [id])
-  quantity Int
-  cost     Decimal       @db.Decimal(10, 2)
+  id         String        @id @default(uuid())
+  orderId    String
+  order      PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemId     String
+  item       Item          @relation(fields: [itemId], references: [id])
+  quantity   Int
+  receivedQty Int          @default(0) // avance de recepción; remaining = quantity - receivedQty
+  cost       Decimal       @db.Decimal(10, 2)
 }
 
 model Employee {
@@ -307,6 +319,7 @@ model CashSession {
 
   movements CashMovement[]
   sales     Sale[]
+  returns   SaleReturn[]
 
   @@index([tenantId])
   @@index([tenantId, status])
@@ -337,4 +350,82 @@ model TaxRate {
   createdAt   DateTime @default(now())
 
   @@index([tenantId])
+}
+
+model InvoicingConfig {
+  id          String   @id @default(uuid())
+  tenantId    String   @unique
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caiNumber   String
+  rangeFrom   String
+  rangeTo     String
+  limitDate   DateTime?
+  companyTaxId String
+  legalName   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Receivable {
+  id            String   @id @default(uuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  saleId        String
+  sale          Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  personId      String
+  person        Person   @relation(fields: [personId], references: [id])
+  originalAmount Decimal @db.Decimal(10, 2)
+  balance       Decimal  @db.Decimal(10, 2) @default(0)
+  status        String   @default("OPEN") // OPEN | PARTIAL | PAID
+  createdAt     DateTime @default(now())
+
+  payments ReceivablePayment[]
+
+  @@index([tenantId])
+  @@index([saleId])
+}
+
+model ReceivablePayment {
+  id          String     @id @default(uuid())
+  tenantId    String
+  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  receivableId String
+  receivable  Receivable @relation(fields: [receivableId], references: [id], onDelete: Cascade)
+  amount      Decimal    @db.Decimal(10, 2)
+  method      String     @default("CASH") // CASH | CARD | TRANSFER
+  createdAt   DateTime   @default(now())
+
+  @@index([receivableId])
+  @@index([tenantId])
+}
+
+model SaleReturn {
+  id            String      @id @default(uuid())
+  tenantId      String
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  saleId        String
+  sale          Sale        @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  cashSessionId String?
+  cashSession   CashSession? @relation(fields: [cashSessionId], references: [id])
+  reason        String?
+  totalRefund   Decimal     @db.Decimal(10, 2)
+  createdAt     DateTime    @default(now())
+
+  items SaleReturnItem[]
+
+  @@index([tenantId])
+  @@index([saleId])
+}
+
+model SaleReturnItem {
+  id          String      @id @default(uuid())
+  returnId    String
+  return      SaleReturn  @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  itemId      String
+  item        Item        @relation(fields: [itemId], references: [id])
+  quantity    Int
+  refundAmount Decimal    @db.Decimal(10, 2)
+
+  @@index([returnId])
+  @@index([itemId])
 }

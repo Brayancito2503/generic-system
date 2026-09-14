@@ -45,23 +45,23 @@ Feature-branch-chain base boundaries: PR #1 (S1) base = `feature/distribution-co
 
 ## Phase 2 — S2 Security Foundation
 
-- [ ] 2.1 Open question — SUPER_ADMIN passthrough (early): grep `requireApiAuth`/role-list consumers across `src/`; confirm none depend on strict-role denial before extending `requireApiAuth`; record finding [S2a]
-- [ ] 2.2 `package.json` M: add direct `zod ^3` dependency; install [S2a]
-- [ ] 2.3 `src/core/schemas/tenant.ts` C; `src/core/schemas/distribution.ts` C: Zod for customer/PO/employee/supplier/inventory/sale/cash-close/invoicing/settings/pagination inputs; no `any` [S2a]
-- [ ] 2.4 `src/lib/api-error.ts` C: `ApiError` + `handleApiError` → 400/401/403/404/409 ES messages [S2a]
-- [ ] 2.5 `src/lib/session.ts` M: `requireApiAuth` lets SUPER_ADMIN satisfy any roles list (blocked until 2.1 passes) [S2a]
-- [ ] 2.6 `src/app/api/auth/me/route.ts` M: add `tenant {name, modules}` payload [S2a]
-- [ ] 2.7 All 14 `src/app/api/distribution/**/route.ts` M: `requireTenantId` + `requireApiAuth(role)` + Zod + `handleApiError`; grep guard + `safeParse` per route [S2b]
+- [x] 2.1 Open question — SUPER_ADMIN passthrough (early): grep `requireApiAuth`/role-list consumers across `src/`; confirm none depend on strict-role denial before extending `requireApiAuth`; record finding [S2a]
+- [x] 2.2 `package.json` M: add direct `zod ^3` dependency; install [S2a]
+- [x] 2.3 `src/core/schemas/tenant.ts` C; `src/core/schemas/distribution.ts` C: Zod for customer/PO/employee/supplier/inventory/sale/cash-close/invoicing/settings/pagination inputs; no `any` [S2a]
+- [x] 2.4 `src/lib/api-error.ts` C: `ApiError` + `handleApiError` → 400/401/403/404/409 ES messages [S2a]
+- [x] 2.5 `src/lib/session.ts` M: `requireApiAuth` lets SUPER_ADMIN satisfy any roles list (blocked until 2.1 passes) [S2a]
+- [x] 2.6 `src/app/api/auth/me/route.ts` M: add `tenant {name, modules}` payload [S2a]
+- [x] 2.7 All 14 `src/app/api/distribution/**/route.ts` M: `requireTenantId` + `requireApiAuth(role)` + Zod + `handleApiError`; grep guard + `safeParse` per route [S2b]
 
 ## Phase 3 — S3 P0 (sale-blocking)
 
-- [ ] 3.1 Backup DB; `prisma/schema.prisma` M + `prisma/migrations/<ts>_distribution_complete/migration.sql` C: additive DDL (Sale.paymentMethod/paidAmount/balance; PurchaseOrderItem.receivedQty; InvoicingConfig; Receivable; ReceivablePayment; SaleReturn; SaleReturnItem); `prisma generate`; never unsupervised `migrate dev` [S3a]
-- [ ] 3.2 `src/core/entities/distribution.ts` M: cash/sale fields, invoicing/return/receivable types, `PaginatedResult<T>`; `src/core/ports/distribution-repository.port.ts` M: `CloseCashSessionInput {sessionId, physicalCount}` + customer/PO/employee/config contracts [S3a]
-- [ ] 3.3 `src/infrastructure/db/repositories/prisma-distribution.repository.ts` M: sale tx (stock decrement → SaleCounter++ → sale+items → receivable; `@@unique([tenantId, invoiceNumber])`; next `INV-YYYYMMDD-######` after seed 16), server-side close (expected vs physicalCount), open-session 409, PO-receive qty ≤ remaining → 409 [S3b]
-- [ ] 3.4 Open question — SaleCounter continuity: `prisma/seed.ts` M: upsert `SaleCounter{lastNumber: 16}` (after 16 `FAC-*`), items to 3 seeded POs, default InvoicingConfig [S3b]
-- [ ] 3.5 Routes: `src/app/api/distribution/tax/config/route.ts` C GET/PUT TENANT_ADMIN+Zod; `customers/route.ts` M POST; `customers/[id]/route.ts` C PATCH; `purchase-orders/route.ts` M POST; `purchase-orders/[id]/receive/route.ts` C POST (409 over-receive) [S3c]
-- [ ] 3.6 Open question — employee→User PIN link: `employees/[id]/route.ts` C PATCH/deactivate + User link (upsert User: personId = employee.personId, bcrypt(PIN) → posPinHash, role STAFF, same tx); `cash/route.ts` M open-409; `cash/close/route.ts` M physicalCount-only server close [S3c]
-- [ ] 3.7 Views: `TaxAndInvoicingView.tsx` M (server CAI, drop fake local state + hardcoded `000-001-01-00001249`), `CashRegisterView.tsx` M, `CustomersView.tsx` C, `EmployeesView.tsx` M, `SuppliersView.tsx` M (PO create/receive), `DistributionModuleApp.tsx` M (customers tab); i18n es+en [S3d]
+- [x] 3.1 Backup DB; `prisma/schema.prisma` M + `prisma/migrations/<ts>_distribution_complete/migration.sql` C: additive DDL (Sale.paymentMethod/paidAmount/balance; PurchaseOrderItem.receivedQty; InvoicingConfig; Receivable; ReceivablePayment; SaleReturn; SaleReturnItem); `prisma generate`; never unsupervised `migrate dev` [S3a]
+- [x] 3.2 `src/core/entities/distribution.ts` M: cash/sale fields, invoicing/return/receivable types, `PaginatedResult<T>`; `src/core/ports/distribution-repository.port.ts` M: `CloseCashSessionInput {sessionId, physicalCount}` + customer/PO/employee/config contracts [S3a]
+- [x] 3.3 `src/infrastructure/db/repositories/prisma-distribution.repository.ts` M: sale tx (stock decrement → SaleCounter++ → sale+items → receivable; `@@unique([tenantId, invoiceNumber])`; next `INV-YYYYMMDD-######` after seed 16), server-side close (expected vs physicalCount), open-session 409, PO-receive qty ≤ remaining → 409 [S3b]
+- [x] 3.4 Open question — SaleCounter continuity: `prisma/seed.ts` M: upsert `SaleCounter{lastNumber: 16}` (after 16 `FAC-*`), items to 3 seeded POs, default InvoicingConfig [S3b]
+- [x] 3.5 Routes: `src/app/api/distribution/tax/config/route.ts` C GET/PUT TENANT_ADMIN+Zod; `customers/route.ts` M POST; `customers/[id]/route.ts` C PATCH; `purchase-orders/route.ts` M POST; `purchase-orders/[id]/receive/route.ts` C POST (409 over-receive) [S3c]
+- [x] 3.6 Open question — employee→User PIN link: `employees/[id]/route.ts` C PATCH/deactivate + User link (upsert User: personId = employee.personId, bcrypt(PIN) → posPinHash, role STAFF, same tx); `cash/route.ts` M open-409; `cash/close/route.ts` M physicalCount-only server close [S3c]
+- [x] 3.7 Views: `TaxAndInvoicingView.tsx` M (server CAI, drop fake local state + hardcoded `000-001-01-00001249`), `CashRegisterView.tsx` M, `CustomersView.tsx` C, `EmployeesView.tsx` M, `SuppliersView.tsx` M (PO create/receive), `DistributionModuleApp.tsx` M (customers tab); i18n es+en [S3d]
 
 ## Phase 4 — S4 P1 (100%)
 

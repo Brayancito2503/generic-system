@@ -12,12 +12,14 @@ import {
     Store,
     ShoppingCart,
     History,
+    Contact,
 } from "lucide-react";
 import { DistributionDashboard } from "./DistributionDashboard";
 import { InventoryView } from "./InventoryView";
 import { CashRegisterView } from "./CashRegisterView";
 import { SalesPOSView } from "./SalesPOSView";
 import { SalesHistoryView } from "./SalesHistoryView";
+import { CustomersView } from "./CustomersView";
 import SuppliersView from "./SuppliersView";
 import EmployeesView from "./EmployeesView";
 import TaxAndInvoicingView from "./TaxAndInvoicingView";
@@ -27,6 +29,7 @@ export type DistributionTab =
     | "inventory"
     | "sales"
     | "history"
+    | "customers"
     | "cash"
     | "suppliers"
     | "employees"
@@ -41,6 +44,7 @@ export default function DistributionModuleApp() {
         { id: "inventory", icon: Package },
         { id: "sales", icon: ShoppingCart },
         { id: "history", icon: History },
+        { id: "customers", icon: Contact },
         { id: "cash", icon: Banknote },
         { id: "suppliers", icon: Truck },
         { id: "employees", icon: Users },
@@ -97,6 +101,7 @@ export default function DistributionModuleApp() {
                 {activeTab === "inventory" && <InventoryView />}
                 {activeTab === "sales" && <SalesPOSView />}
                 {activeTab === "history" && <SalesHistoryView />}
+                {activeTab === "customers" && <CustomersView />}
                 {activeTab === "cash" && <CashRegisterView />}
                 {activeTab === "suppliers" && <SuppliersView />}
                 {activeTab === "employees" && <EmployeesView />}

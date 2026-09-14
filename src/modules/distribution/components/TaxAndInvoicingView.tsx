@@ -17,7 +17,7 @@ import {
   Star,
   AlertCircle,
 } from 'lucide-react';
-import type { TaxRateEntity, FiscalSummary } from '../entities';
+import type { TaxRateEntity, FiscalSummary, InvoicingConfigEntity } from '../entities';
 import { apiGet, apiSend } from '../api';
 
 const fmt = (n: number) =>
@@ -41,6 +41,162 @@ const emptyModal: TaxModalState = {
   isDefault: false,
 };
 
+/** Client form mirror of the server InvoicingConfigEntity (PUT payload). */
+interface CaiForm {
+  caiNumber: string;
+  rangeFrom: string;
+  rangeTo: string;
+  limitDate: string;
+  companyTaxId: string;
+  legalName: string;
+}
+
+const emptyCaiForm: CaiForm = {
+  caiNumber: '',
+  rangeFrom: '',
+  rangeTo: '',
+  limitDate: '',
+  companyTaxId: '',
+  legalName: '',
+};
+
+const toDateInput = (v?: Date | string | null): string =>
+  v ? new Date(v).toISOString().slice(0, 10) : '';
+
+const toCaiForm = (config: InvoicingConfigEntity): CaiForm => ({
+  caiNumber: config.caiNumber,
+  rangeFrom: config.rangeFrom,
+  rangeTo: config.rangeTo,
+  limitDate: toDateInput(config.limitDate),
+  companyTaxId: config.companyTaxId,
+  legalName: config.legalName,
+});
+
+/**
+ * GET /tax/config is TENANT_ADMIN-only and answers 404 when the tenant has no
+ * InvoicingConfig row yet; the view maps 404 to an empty setup form instead of
+ * an error. Any other failure surfaces as a message.
+ */
+async function loadInvoicingConfig(): Promise<InvoicingConfigEntity | null> {
+  const res = await fetch('/api/distribution/tax/config', { cache: 'no-store' });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error ?? 'Error de solicitud');
+  }
+  return res.json() as Promise<InvoicingConfigEntity>;
+}
+
+/** CAI/NCF form; remounted per server config id so its state always starts
+ *  from the persisted value (never from hardcoded defaults). */
+function CaiConfigForm({
+  initial,
+  isSaving,
+  onSubmit,
+}: {
+  initial: CaiForm;
+  isSaving: boolean;
+  onSubmit: (payload: CaiForm) => void;
+}) {
+  const t = useTranslations('distributionModule.tax');
+  const [caiForm, setCaiForm] = useState<CaiForm>(initial);
+
+  const valid =
+    caiForm.caiNumber.trim() !== '' &&
+    caiForm.rangeFrom.trim() !== '' &&
+    caiForm.rangeTo.trim() !== '' &&
+    caiForm.companyTaxId.trim() !== '' &&
+    caiForm.legalName.trim() !== '';
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (valid) onSubmit(caiForm);
+      }}
+      className="space-y-4"
+    >
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">{t('legalName')}</label>
+          <input
+            type="text"
+            value={caiForm.legalName}
+            onChange={(e) => setCaiForm({ ...caiForm, legalName: e.target.value })}
+            className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">{t('companyTaxId')}</label>
+          <input
+            type="text"
+            value={caiForm.companyTaxId}
+            onChange={(e) => setCaiForm({ ...caiForm, companyTaxId: e.target.value })}
+            className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className="text-xs text-muted-foreground block mb-1">{t('caiNumber')}</label>
+        <input
+          type="text"
+          value={caiForm.caiNumber}
+          onChange={(e) => setCaiForm({ ...caiForm, caiNumber: e.target.value })}
+          className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono text-primary focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">{t('rangeFrom')}</label>
+          <input
+            type="text"
+            value={caiForm.rangeFrom}
+            onChange={(e) => setCaiForm({ ...caiForm, rangeFrom: e.target.value })}
+            className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">{t('rangeTo')}</label>
+          <input
+            type="text"
+            value={caiForm.rangeTo}
+            onChange={(e) => setCaiForm({ ...caiForm, rangeTo: e.target.value })}
+            className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">{t('limitDate')}</label>
+          <input
+            type="date"
+            value={caiForm.limitDate}
+            onChange={(e) => setCaiForm({ ...caiForm, limitDate: e.target.value })}
+            className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+        </div>
+      </div>
+
+      <div className="flex justify-end pt-2">
+        <button
+          type="submit"
+          disabled={!valid || isSaving}
+          className="flex items-center gap-2 px-5 py-2.5 bg-primary hover:bg-primary/90 disabled:opacity-50 font-medium text-sm text-primary-foreground rounded-lg transition-colors shadow-sm"
+        >
+          {isSaving ? (
+            <><Loader2 className="w-4 h-4 animate-spin" /> {t('savingCai')}</>
+          ) : (
+            <><Save className="w-4 h-4" /> {t('saveCAI')}</>
+          )}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 export default function TaxAndInvoicingView() {
   const t = useTranslations('distributionModule.tax');
   const queryClient = useQueryClient();
@@ -58,15 +214,15 @@ export default function TaxAndInvoicingView() {
     queryFn: () => apiGet<FiscalSummary>(`/tax/summary`),
   });
 
-  // CAI Settings (config fiscal local del tenant; persistencia próxima iteración)
-  const [caiConfig, setCaiConfig] = useState({
-    caiNumber: '3A4F82-9B10C2-4E67D1-8A9011-223344-01',
-    rangeFrom: '000-001-01-00001001',
-    rangeTo: '000-001-01-00005000',
-    currentSequence: '000-001-01-00001248',
-    limitDate: '2027-04-15',
-    companyTaxId: '03141990123456',
-    legalName: 'DISTRIBUIDORA Y COMERCIALIZADORA DEL VALLE S. DE R.L.',
+  // CAI/NCF configuration is persisted server-side (GET /tax/config + PUT);
+  // the form is seeded from the server value, never from hardcoded defaults.
+  const {
+    data: serverConfig,
+    isPending: isConfigPending,
+    isError: isConfigError,
+  } = useQuery<InvoicingConfigEntity | null>({
+    queryKey: ['tax-config'],
+    queryFn: loadInvoicingConfig,
   });
 
   const refreshTaxes = () => {
@@ -121,11 +277,26 @@ export default function TaxAndInvoicingView() {
       setError(e instanceof Error ? e.message : 'Error al definir la tasa'),
   });
 
-  const handleSaveCAI = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
-  };
+  const saveCai = useMutation({
+    mutationFn: (payload: CaiForm) =>
+      apiSend<InvoicingConfigEntity>(`/tax/config`, 'PUT', {
+        caiNumber: payload.caiNumber,
+        rangeFrom: payload.rangeFrom,
+        rangeTo: payload.rangeTo,
+        companyTaxId: payload.companyTaxId,
+        legalName: payload.legalName,
+        // Empty date must NOT be sent: Zod coerce('') fails (400).
+        ...(payload.limitDate ? { limitDate: new Date(payload.limitDate) } : {}),
+      }),
+    onSuccess: () => {
+      setError(null);
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+      queryClient.invalidateQueries({ queryKey: ['tax-config'] });
+    },
+    onError: (e) =>
+      setError(e instanceof Error ? e.message : 'Error al guardar la configuración fiscal'),
+  });
 
   const handleSubmitModal = (e: React.FormEvent) => {
     e.preventDefault();
@@ -162,111 +333,45 @@ export default function TaxAndInvoicingView() {
 
       {savedSuccess && (
         <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl flex items-center gap-3 text-emerald-500 text-sm">
-          <CheckCircle2 className="w-5 h-5" /> Configuración de Facturación y catálogo de impuestos guardado exitosamente.
+          <CheckCircle2 className="w-5 h-5" /> {t('saved')}
         </div>
       )}
 
       {error && (
         <div className="p-4 bg-destructive/10 border border-destructive/30 rounded-xl flex items-center gap-3 text-destructive text-sm">
           <AlertCircle className="w-5 h-5 shrink-0" /> {error}
-          <button onClick={() => setError(null)} className="ml-auto hover:underline">Cerrar</button>
+          <button onClick={() => setError(null)} className="ml-auto hover:underline">{t('closeError')}</button>
         </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Formulario CAI y Datos Empresa */}
+        {/* Formulario CAI y Datos Empresa (server-persisted) */}
         <div className="lg:col-span-2 bg-card border border-border rounded-xl p-6 space-y-6 shadow-sm">
           <div className="flex items-center gap-3 pb-3 border-b border-border">
             <Building2 className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-bold text-foreground">Datos Fiscales y Registro CAI</h2>
+            <h2 className="text-lg font-bold text-foreground">{t('fiscalTitle')}</h2>
           </div>
 
-          <form onSubmit={handleSaveCAI} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs text-muted-foreground block mb-1">Razón Social Fiscal</label>
-                <input
-                  type="text"
-                  value={caiConfig.legalName}
-                  onChange={(e) => setCaiConfig({ ...caiConfig, legalName: e.target.value })}
-                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs text-muted-foreground block mb-1">RUC de la Empresa</label>
-                <input
-                  type="text"
-                  value={caiConfig.companyTaxId}
-                  onChange={(e) => setCaiConfig({ ...caiConfig, companyTaxId: e.target.value })}
-                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
+          {isConfigPending ? (
+            <div className="flex items-center justify-center py-8 text-muted-foreground gap-2">
+              <Loader2 className="w-5 h-5 animate-spin" /> {t('loadingConfig')}
             </div>
-
-            <div>
-              <label className="text-xs text-muted-foreground block mb-1">Código CAI Autorizado por DGI</label>
-              <input
-                type="text"
-                value={caiConfig.caiNumber}
-                onChange={(e) => setCaiConfig({ ...caiConfig, caiNumber: e.target.value })}
-                className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono text-primary focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs text-muted-foreground block mb-1">Rango Autorizado Desde</label>
-                <input
-                  type="text"
-                  value={caiConfig.rangeFrom}
-                  onChange={(e) => setCaiConfig({ ...caiConfig, rangeFrom: e.target.value })}
-                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs text-muted-foreground block mb-1">Rango Autorizado Hasta</label>
-                <input
-                  type="text"
-                  value={caiConfig.rangeTo}
-                  onChange={(e) => setCaiConfig({ ...caiConfig, rangeTo: e.target.value })}
-                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs text-muted-foreground block mb-1">Fecha Límite de Emisión</label>
-                <input
-                  type="date"
-                  value={caiConfig.limitDate}
-                  onChange={(e) => setCaiConfig({ ...caiConfig, limitDate: e.target.value })}
-                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
-            </div>
-
-            <div className="p-4 bg-muted/50 border border-border rounded-lg flex items-center justify-between">
-              <div>
-                <p className="text-xs text-muted-foreground">Secuencia Actual de Correlativo</p>
-                <p className="text-base font-mono font-bold text-emerald-500 mt-0.5">
-                  {caiConfig.currentSequence}
+          ) : (
+            <>
+              {serverConfig === null && !isConfigError && (
+                <p className="text-sm text-muted-foreground bg-muted/40 border border-border rounded-lg px-3 py-2">
+                  {t('notConfiguredHint')}
                 </p>
-              </div>
-              <span className="px-3 py-1 bg-primary/10 text-primary text-xs font-semibold rounded-full border border-primary/20">
-                Próxima Factura: 000-001-01-00001249
-              </span>
-            </div>
+              )}
 
-            <div className="flex justify-end pt-2">
-              <button
-                type="submit"
-                className="flex items-center gap-2 px-5 py-2.5 bg-primary hover:bg-primary/90 font-medium text-sm text-primary-foreground rounded-lg transition-colors shadow-sm"
-              >
-                <Save className="w-4 h-4" /> Guardar Cambios CAI
-              </button>
-            </div>
-          </form>
+              <CaiConfigForm
+                key={serverConfig?.id ?? 'creating'}
+                initial={serverConfig ? toCaiForm(serverConfig) : emptyCaiForm}
+                isSaving={saveCai.isPending}
+                onSubmit={(payload) => saveCai.mutate(payload)}
+              />
+            </>
+          )}
         </div>
 
         {/* Catálogo de Tasas de Impuesto */}
@@ -281,13 +386,13 @@ export default function TaxAndInvoicingView() {
                 onClick={() => setModal({ ...emptyModal })}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium rounded-lg transition-colors"
               >
-                <Plus className="w-3.5 h-3.5" /> Agregar
+                <Plus className="w-3.5 h-3.5" /> {t('addRate')}
               </button>
             </div>
 
             {isPending ? (
               <div className="flex items-center justify-center py-8 text-muted-foreground gap-2">
-                <Loader2 className="w-5 h-5 animate-spin" /> Cargando...
+                <Loader2 className="w-5 h-5 animate-spin" /> {t('loadingRates')}
               </div>
             ) : (
               <div className="space-y-3">
@@ -306,7 +411,7 @@ export default function TaxAndInvoicingView() {
                             </span>
                           )}
                         </div>
-                        <p className="text-xs text-muted-foreground mt-0.5">Tasa impositiva: {tItem.rate}%</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{t('rateLabel')}: {tItem.rate}%</p>
                       </div>
                       <span className="font-mono text-lg font-bold text-emerald-500">{tItem.rate}%</span>
                     </div>
@@ -314,10 +419,10 @@ export default function TaxAndInvoicingView() {
                       {!tItem.isDefault && (
                         <button
                           onClick={() => setDefault.mutate(tItem.id)}
-                          title="Establecer como predeterminada"
+                          title={t('setDefaultTitle')}
                           className="flex items-center gap-1 px-2 py-1 rounded-md bg-muted hover:bg-primary/20 hover:text-primary text-muted-foreground text-xs transition-colors"
                         >
-                          <Star className="w-3 h-3" /> Predeterminar
+                          <Star className="w-3 h-3" /> {t('setDefault')}
                         </button>
                       )}
                       <button
@@ -330,27 +435,27 @@ export default function TaxAndInvoicingView() {
                             isDefault: tItem.isDefault,
                           })
                         }
-                        title="Editar tasa"
+                        title={t('editRateTitle')}
                         className="flex items-center gap-1 px-2 py-1 rounded-md bg-muted hover:bg-primary/20 hover:text-primary text-muted-foreground text-xs transition-colors"
                       >
-                        <Pencil className="w-3 h-3" /> Editar
+                        <Pencil className="w-3 h-3" /> {t('editRate')}
                       </button>
                       <button
                         onClick={() => {
-                          if (window.confirm(`¿Eliminar la tasa "${tItem.name}"?`)) {
+                          if (window.confirm(t('deleteRateConfirm', { name: tItem.name }))) {
                             deleteTax.mutate(tItem.id);
                           }
                         }}
-                        title="Eliminar tasa"
+                        title={t('deleteRateTitle')}
                         className="flex items-center gap-1 px-2 py-1 rounded-md bg-muted hover:bg-destructive/20 hover:text-destructive text-muted-foreground text-xs transition-colors"
                       >
-                        <Trash2 className="w-3 h-3" /> Eliminar
+                        <Trash2 className="w-3 h-3" /> {t('deleteRate')}
                       </button>
                     </div>
                   </div>
                 ))}
                 {taxes.length === 0 && (
-                  <p className="text-sm text-muted-foreground py-4 text-center">No hay tasas de impuesto configuradas.</p>
+                  <p className="text-sm text-muted-foreground py-4 text-center">{t('noRates')}</p>
                 )}
               </div>
             )}
@@ -359,32 +464,32 @@ export default function TaxAndInvoicingView() {
           {/* Reporte resumido fiscal */}
           <div className="bg-card border border-border rounded-xl p-6 space-y-3 shadow-sm">
             <h3 className="font-semibold text-sm text-foreground flex items-center gap-2">
-              <Calculator className="w-4 h-4 text-primary" /> Resumen Fiscal del Mes {monthLabel && `· ${monthLabel}`}
+              <Calculator className="w-4 h-4 text-primary" /> {t('fiscalSummary')} {monthLabel && `· ${monthLabel}`}
             </h3>
             {isSummaryPending ? (
               <div className="flex items-center justify-center py-6 text-muted-foreground gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" /> Calculando...
+                <Loader2 className="w-4 h-4 animate-spin" /> {t('calculating')}
               </div>
             ) : (
               <div className="space-y-2 text-xs text-muted-foreground pt-2 border-t border-border">
                 <div className="flex justify-between py-1">
-                  <span>Ventas del mes:</span>
+                  <span>{t('monthlySales')}:</span>
                   <span className="font-semibold text-foreground">{fmt(summary?.taxedRevenue ?? 0)}</span>
                 </div>
                 <div className="flex justify-between py-1">
-                  <span>Facturas emitidas:</span>
+                  <span>{t('invoicesIssued')}:</span>
                   <span className="font-semibold text-foreground">{summary?.totalSales ?? 0}</span>
                 </div>
                 <div className="flex justify-between py-1">
-                  <span>IVA Recaudado:</span>
+                  <span>{t('vatCollected')}:</span>
                   <span className="font-semibold text-emerald-500">{fmt(summary?.taxCollected ?? 0)}</span>
                 </div>
                 <div className="flex justify-between py-1 border-t border-border/60 pt-2 font-medium">
-                  <span className="text-foreground">Total Impuesto a Declarar (DGI):</span>
+                  <span className="text-foreground">{t('totalTaxDue')}:</span>
                   <span className="font-bold text-primary">{fmt(summary?.taxCollected ?? 0)}</span>
                 </div>
                 <div className="flex justify-between py-1 font-medium">
-                  <span className="text-emerald-500">Utilidad Bruta del Mes:</span>
+                  <span className="text-emerald-500">{t('grossProfit')}:</span>
                   <span className="font-bold text-emerald-500">{fmt(summary?.profit ?? 0)}</span>
                 </div>
               </div>
@@ -401,22 +506,22 @@ export default function TaxAndInvoicingView() {
             className="w-full max-w-md bg-card border border-border rounded-2xl p-6 space-y-4 shadow-xl"
           >
             <h3 className="text-lg font-bold text-foreground">
-              {modal.id ? 'Editar Tasa de Impuesto' : 'Nueva Tasa de Impuesto'}
+              {modal.id ? t('editRateModalTitle') : t('newRateModalTitle')}
             </h3>
 
             <div>
-              <label className="text-xs text-muted-foreground block mb-1">Nombre</label>
+              <label className="text-xs text-muted-foreground block mb-1">{t('name')}</label>
               <input
                 type="text"
                 value={modal.name}
                 onChange={(e) => setModal({ ...modal, name: e.target.value })}
-                placeholder="Ej: IVA General 15%"
+                placeholder={t('namePlaceholder')}
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
               />
             </div>
 
             <div>
-              <label className="text-xs text-muted-foreground block mb-1">Tasa (%)</label>
+              <label className="text-xs text-muted-foreground block mb-1">{t('rate')} (%)</label>
               <input
                 type="number"
                 min="0"
@@ -435,7 +540,7 @@ export default function TaxAndInvoicingView() {
                 onChange={(e) => setModal({ ...modal, isInclusive: e.target.checked })}
                 className="accent-primary"
               />
-              El precio incluye el impuesto (IVA incluido)
+              {t('inclusiveLabel')}
             </label>
 
             <label className="flex items-center gap-2 text-sm text-foreground">
@@ -445,7 +550,7 @@ export default function TaxAndInvoicingView() {
                 onChange={(e) => setModal({ ...modal, isDefault: e.target.checked })}
                 className="accent-primary"
               />
-              Usar como tasa predeterminada (POS y ventas)
+              {t('defaultLabel')}
             </label>
 
             <div className="flex justify-end gap-2 pt-2 border-t border-border">
@@ -454,7 +559,7 @@ export default function TaxAndInvoicingView() {
                 onClick={() => setModal(null)}
                 className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
               >
-                Cancelar
+                {t('cancel')}
               </button>
               <button
                 type="submit"
@@ -462,9 +567,9 @@ export default function TaxAndInvoicingView() {
                 className="flex items-center gap-2 px-5 py-2.5 bg-primary hover:bg-primary/90 disabled:opacity-50 text-sm font-medium text-primary-foreground rounded-lg transition-colors"
               >
                 {saveTax.isPending ? (
-                  <><Loader2 className="w-4 h-4 animate-spin" /> Guardando...</>
+                  <><Loader2 className="w-4 h-4 animate-spin" /> {t('saving')}</>
                 ) : (
-                  <><Save className="w-4 h-4" /> Guardar</>
+                  <><Save className="w-4 h-4" /> {t('save')}</>
                 )}
               </button>
             </div>
