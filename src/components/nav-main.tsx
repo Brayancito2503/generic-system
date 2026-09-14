@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/sidebar"
 import { ChevronRightIcon } from "lucide-react"
 import { Link, usePathname } from "@/i18n/navigation"
+import { useTranslations } from "next-intl"
 
 export function NavMain({
   items,
@@ -36,10 +37,11 @@ export function NavMain({
     }[]
   }[]
 }) {
+  const t = useTranslations('sidebar');
   const pathName = usePathname();
   return (
     <SidebarGroup>
-      <SidebarGroupLabel>Módulos Principales</SidebarGroupLabel>
+      <SidebarGroupLabel>{t('groupLabel')}</SidebarGroupLabel>
       <SidebarMenu>
         {items.map((item) => {
           // Ocultar si el permiso/rol no lo permite

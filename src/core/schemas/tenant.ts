@@ -39,6 +39,18 @@ export const updateTenantSchema = z
   })
   .refine(hasAnyDefinedField, { message: 'No hay campos válidos para actualizar' });
 
+/**
+ * PUT /api/distribution/settings (TENANT_ADMIN): tenant identity (name) plus a
+ * partial Tenant.settings merge (logoUrl, primaryColor, currency, timezone).
+ * The refine() rejects a payload with no definable field at all.
+ */
+export const tenantSettingsUpdateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    settings: tenantSettingsSchema.optional(),
+  })
+  .refine(hasAnyDefinedField, { message: 'No hay campos válidos para actualizar' });
+
 export const paginationSchema = z.object({
   // limit fuera de 1..100 → 400; página fuera de rango → lista vacía (contrato P1)
   page: z.coerce.number().int().min(1).default(1),
