@@ -222,6 +222,21 @@ export interface RecentSale {
   time: string;
 }
 
+/**
+ * Period-over-period trend percentages for a dashboard window. Values are
+ * percentage points (12.4 means twelve point four percent increase); every
+ * value is 0 when either window has no activity — an empty period never
+ * divides by zero and never yields NaN/Infinity.
+ */
+export interface DashboardTrend {
+  /** % change of revenue (Σ sale totals) vs the previous period. */
+  revenue: number;
+  /** % change of order count vs the previous period. */
+  orders: number;
+  /** % change of average ticket (revenue / orders) vs the previous period. */
+  avgTicket: number;
+}
+
 export interface DistributionDashboardStats {
   salesToday: number;
   salesThisMonth: number;
@@ -229,6 +244,11 @@ export interface DistributionDashboardStats {
   lowStockItems: number;
   cashInRegister: number;
   activeEmployees: number;
+  /** Real period-over-period trends: today vs yesterday, month-to-date vs previous month. */
+  trends: {
+    today: DashboardTrend;
+    month: DashboardTrend;
+  };
   topProducts: { name: string; sold: number; revenue: number }[];
   salesByDay: { date: string; total: number }[];
   recentSales: RecentSale[];

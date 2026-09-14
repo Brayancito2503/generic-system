@@ -105,8 +105,22 @@ export const createSupplierSchema = z.object({
   address: nullableText,
 });
 
-export const updateSupplierSchema = createSupplierSchema
-  .partial()
+/**
+ * Edición + desactivación de proveedores. A diferencia del create, `isActive`
+ * es PATCHeable: `isActive: false` desactiva sin tocar las órdenes de compra
+ * existentes (el create de PO ya rechaza proveedores inactivos en el servidor).
+ * `null` limpia los campos de contacto nullable; `undefined` los deja intactos.
+ */
+export const updateSupplierSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    contactName: nullableText,
+    phone: nullableText,
+    email: nullableEmail,
+    taxId: nullableText,
+    address: nullableText,
+    isActive: z.boolean().optional(),
+  })
   .refine(hasAnyDefinedField, { message: 'No hay campos válidos para actualizar' });
 
 // ---------------------------------------------------------------------------
@@ -151,13 +165,45 @@ export const registerSaleSchema = z.object({
   personId: nullableText,
   notes: nullableText,
   paymentMethod: z.enum(['CASH', 'CARD', 'TRANSFER', 'CREDIT']).default('CASH'),
+  // Only the tendered amount is client input; `balance` is derived server-side
+  // (total − paidAmount) inside the sale transaction and never accepted here.
   paidAmount: nonNegativeNumber.optional(),
-  balance: nonNegativeNumber.optional(),
 });
 
-/** Legacy list query: `limit` cap keeps the current `take 500` contract; pagination lands in P1. */
+/** List query for `GET /sales`: paginated, tenant-scoped (limit 1..100; out-of-range pages → empty). */
 export const salesListQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(500).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+// ---------------------------------------------------------------------------
+// Returns (P1): audited refunds/voids that restore stock. The repo rejects an
+// over-return (refunded qty > sold qty) with 409 and adjusts the receivable
+// balance of the original credit sale; all money math is server-side.
+// ---------------------------------------------------------------------------
+
+export const saleReturnItemSchema = z.object({
+  itemId: idString,
+  quantity: z.number().int().positive(),
+});
+
+export const createSaleReturnSchema = z.object({
+  items: z.array(saleReturnItemSchema).min(1),
+  reason: nullableText,
+});
+
+/** List query for `GET /receivables`: tenant-scoped, paginated, optional status filter. */
+export const receivablesListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  status: z.enum(['OPEN', 'PARTIAL', 'PAID']).optional(),
+});
+
+/** Payment on a receivable: amount must be > 0 (repo enforces it against the remaining balance). */
+export const payReceivableSchema = z.object({
+  amount: z.number().finite().positive(),
+  // Credit is never a settlement method; receivables are paid CASH/CARD/TRANSFER.
+  method: z.enum(['CASH', 'CARD', 'TRANSFER']).default('CASH'),
 });
 
 // ---------------------------------------------------------------------------

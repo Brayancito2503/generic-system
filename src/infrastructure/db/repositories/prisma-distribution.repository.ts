@@ -8,6 +8,7 @@ import type {
   CreateInventoryItemInput,
   UpdateInventoryItemInput,
   CreateSupplierInput,
+  UpdateSupplierInput,
   CreateEmployeeInput,
   CreateCustomerInput,
   UpdateCustomerInput,
@@ -21,20 +22,27 @@ import type {
   UpdateTaxRateInput,
   ReceivePurchaseOrderInput,
   RegisterSaleInput,
+  CreateSaleReturnInput,
+  PayReceivableInput,
 } from '@/core/ports/distribution-repository.port';
 import type {
   CashMovementEntity,
   CashSessionEntity,
   CustomerLight,
+  DashboardTrend,
   DistributionDashboardStats,
   EmployeeEntity,
   FiscalSummary,
   InvoicingConfigEntity,
   InventoryStockItem,
+  PaginatedResult,
   PaymentMethod,
   PurchaseOrderEntity,
+  ReceivableEntity,
+  ReceivableStatus,
   RecentSale,
   SaleEntity,
+  SaleReturnEntity,
   SupplierEntity,
   TaxRateEntity,
 } from '@/core/entities/distribution';
@@ -67,6 +75,36 @@ function relativeTime(date: Date): string {
   return minutes > 0 ? `hace ${hours}h ${minutes}min` : `hace ${hours}h`;
 }
 
+/**
+ * Period-over-period percentage change expressed in percentage points
+ * (e.g. 12.4 means twelve point four percent increase). An empty current OR
+ * previous window returns 0 (empty state) — never NaN/Infinity, and never a
+ * divide-by-zero.
+ */
+function pctChange(current: number, previous: number): number {
+  if (current <= 0 || previous <= 0) return 0;
+  return Math.round(((current - previous) / previous) * 1000) / 10;
+}
+
+/** Trend triple (revenue / orders / avgTicket) comparing a current window against the previous one. */
+function buildTrend(
+  current: { revenue: number; orders: number },
+  previous: { revenue: number; orders: number }
+): DashboardTrend {
+  return {
+    revenue: pctChange(current.revenue, previous.revenue),
+    orders: pctChange(current.orders, previous.orders),
+    // Avg-ticket needs sales in BOTH windows; otherwise 0 (empty state).
+    avgTicket:
+      current.orders > 0 && previous.orders > 0
+        ? pctChange(
+            current.revenue / current.orders,
+            previous.revenue / previous.orders
+          )
+        : 0,
+  };
+}
+
 function firstBranchOfTenant(tenantId: string, branchId?: string) {
   if (branchId) {
     return prisma.branch.findFirst({ where: { id: branchId, tenantId } });
@@ -77,24 +115,66 @@ function firstBranchOfTenant(tenantId: string, branchId?: string) {
 export class PrismaDistributionRepository implements IDistributionRepository {
   // ─── Dashboard ─────────────────────────────────────────────────────────────
   async getDashboard(tenantId: string): Promise<DistributionDashboardStats> {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-
-    const startOfMonth = new Date(
-      startOfToday.getFullYear(),
-      startOfToday.getMonth(),
+    const now = new Date();
+    const startOfToday = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate()
+    );
+    const startOfYesterday = new Date(startOfToday);
+    startOfYesterday.setDate(startOfToday.getDate() - 1);
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfPrevMonth = new Date(
+      now.getFullYear(),
+      now.getMonth() - 1,
       1
     );
 
-    const todayAgg = await prisma.sale.aggregate({
-      where: { tenantId, createdAt: { gte: startOfToday } },
-      _sum: { total: true },
-    });
+    // Trend windows from REAL Sale rows: today / yesterday / month-to-date /
+    // previous month. Revenue and order counts drive the badges; the avg
+    // ticket and every percentage derive from these numbers (no hardcodes).
+    const [todayAgg, yesterdayAgg, monthAgg, prevMonthAgg] = await Promise.all([
+      prisma.sale.aggregate({
+        where: { tenantId, createdAt: { gte: startOfToday } },
+        _count: { _all: true },
+        _sum: { total: true },
+      }),
+      prisma.sale.aggregate({
+        where: {
+          tenantId,
+          createdAt: { gte: startOfYesterday, lt: startOfToday },
+        },
+        _count: { _all: true },
+        _sum: { total: true },
+      }),
+      prisma.sale.aggregate({
+        where: { tenantId, createdAt: { gte: startOfMonth } },
+        _count: { _all: true },
+        _sum: { total: true },
+      }),
+      prisma.sale.aggregate({
+        where: {
+          tenantId,
+          createdAt: { gte: startOfPrevMonth, lt: startOfMonth },
+        },
+        _count: { _all: true },
+        _sum: { total: true },
+      }),
+    ]);
 
-    const monthAgg = await prisma.sale.aggregate({
-      where: { tenantId, createdAt: { gte: startOfMonth } },
-      _sum: { total: true },
+    type SaleWindowAgg = typeof todayAgg;
+    const windowOf = (agg: SaleWindowAgg) => ({
+      revenue: agg._sum.total?.toNumber() ?? 0,
+      orders: agg._count._all ?? 0,
     });
+    const today = windowOf(todayAgg);
+    const yesterday = windowOf(yesterdayAgg);
+    const month = windowOf(monthAgg);
+    const prevMonth = windowOf(prevMonthAgg);
+    const trends = {
+      today: buildTrend(today, yesterday),
+      month: buildTrend(month, prevMonth),
+    };
 
     const totalProducts = await prisma.item.count({ where: { tenantId } });
 
@@ -116,25 +196,41 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       ? cashSession.openingAmount + movementsSum + (cashSession.salesTotal ?? 0)
       : 0;
 
-    const groupedTop = await prisma.saleItem.groupBy({
-      by: ['itemId'],
-      where: { sale: { tenantId } },
-      _sum: { quantity: true },
-      orderBy: { _sum: { quantity: 'desc' } },
-      take: 5,
+    // Top products: revenue = Σ SaleItem.price × quantity at SALE-TIME prices
+    // (not the current Item price), scoped to the current period (month-to-
+    // date), ranked by revenue. Decimal math stays server-side.
+    const saleItems = await prisma.saleItem.findMany({
+      where: { sale: { tenantId, createdAt: { gte: startOfMonth } } },
+      select: { itemId: true, quantity: true, price: true },
     });
+    const revenueByItem = new Map<string, number>();
+    const soldByItem = new Map<string, number>();
+    for (const si of saleItems) {
+      revenueByItem.set(
+        si.itemId,
+        (revenueByItem.get(si.itemId) ?? 0) + si.price.toNumber() * si.quantity
+      );
+      soldByItem.set(si.itemId, (soldByItem.get(si.itemId) ?? 0) + si.quantity);
+    }
+    const ranked = [...revenueByItem.entries()]
+      .map(([itemId, revenue]) => ({
+        itemId,
+        revenue,
+        sold: soldByItem.get(itemId) ?? 0,
+      }))
+      .sort((a, b) => b.revenue - a.revenue || b.sold - a.sold)
+      .slice(0, 5);
 
     const topItems = await prisma.item.findMany({
-      where: { tenantId, id: { in: groupedTop.map((g) => g.itemId) } },
+      where: { tenantId, id: { in: ranked.map((r) => r.itemId) } },
     });
 
-    const topProducts = groupedTop.map((g) => {
-      const item = topItems.find((i) => i.id === g.itemId);
-      const sold = g._sum.quantity ?? 0;
+    const topProducts = ranked.map((r) => {
+      const item = topItems.find((i) => i.id === r.itemId);
       return {
         name: item?.name ?? 'Producto eliminado',
-        sold,
-        revenue: sold * (item?.price.toNumber() ?? 0),
+        sold: r.sold,
+        revenue: Math.round(r.revenue * 100) / 100,
       };
     });
 
@@ -166,12 +262,13 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     const recentSales = await this.getRecentSales(tenantId);
 
     return {
-      salesToday: todayAgg._sum.total?.toNumber() ?? 0,
-      salesThisMonth: monthAgg._sum.total?.toNumber() ?? 0,
+      salesToday: today.revenue,
+      salesThisMonth: month.revenue,
       totalProducts,
       lowStockItems,
       cashInRegister,
       activeEmployees,
+      trends,
       topProducts,
       salesByDay,
       recentSales,
@@ -280,7 +377,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       include: { inventory: true },
     });
     if (!existing) {
-      throw new Error('Producto no encontrado');
+      throw new ApiError(404, 'Producto no encontrado');
     }
 
     const itemData: {
@@ -300,24 +397,47 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       const skuConflict = await prisma.item.findFirst({
         where: { tenantId, sku: itemData.sku, NOT: { id: itemId } },
       });
-      if (skuConflict) throw new Error('El SKU ya existe');
+      if (skuConflict) throw new ApiError(409, 'El SKU ya existe');
+    }
+
+    // Stock writes are branch-scoped: they touch ONLY the targeted branch's
+    // Inventory row. Item-level fields (sku/name/description/cost/price) are
+    // branch-independent and update without a branchId.
+    let inv: { stock: number; minAlert: number } | null = existing.inventory[0] ?? null;
+    if (input.branchId !== undefined) {
+      const branch = await prisma.branch.findFirst({
+        where: { id: input.branchId, tenantId },
+      });
+      if (!branch) {
+        throw new ApiError(404, 'Sucursal no encontrada');
+      }
+      const target = await prisma.inventory.findFirst({
+        where: { tenantId, itemId, branchId: input.branchId },
+      });
+      if (!target) {
+        throw new ApiError(
+          400,
+          'No existe inventario de este producto en la sucursal indicada'
+        );
+      }
+      inv = await prisma.inventory.update({
+        where: { id: target.id },
+        data: {
+          stock: input.stock ?? target.stock,
+          minAlert: input.minAlert ?? target.minAlert,
+        },
+      });
+    } else if (input.stock !== undefined || input.minAlert !== undefined) {
+      // The route rejects this before it reaches the repo; the double guard
+      // makes it impossible for a stock write without a branch to silently
+      // mutate inventory[0] (the legacy cross-branch bug this replaces).
+      throw new ApiError(400, 'Debe indicar la sucursal para actualizar el stock');
     }
 
     const item = await prisma.item.update({
       where: { id: itemId },
       data: itemData,
     });
-
-    let inv = existing.inventory[0];
-    if (inv) {
-      inv = await prisma.inventory.update({
-        where: { id: inv.id },
-        data: {
-          stock: input.stock ?? inv.stock,
-          minAlert: input.minAlert ?? inv.minAlert,
-        },
-      });
-    }
 
     const stock = inv?.stock ?? input.stock ?? 0;
     const minAlert = inv?.minAlert ?? input.minAlert ?? 0;
@@ -334,6 +454,35 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       minAlert,
       isLowStock: stock < minAlert,
     };
+  }
+
+  async deleteInventoryItem(tenantId: string, itemId: string): Promise<void> {
+    const existing = await prisma.item.findFirst({
+      where: { tenantId, id: itemId },
+    });
+    if (!existing) {
+      throw new ApiError(404, 'Producto no encontrado');
+    }
+
+    // Reference guard: an item referenced by sales, purchase orders or
+    // returns is never deletable (its price/qty history must stay intact).
+    // Cash movements carry no item reference in the schema.
+    const [saleRefs, poRefs, returnRefs] = await Promise.all([
+      prisma.saleItem.count({ where: { itemId } }),
+      prisma.purchaseOrderItem.count({ where: { itemId } }),
+      prisma.saleReturnItem.count({ where: { itemId } }),
+    ]);
+    if (saleRefs + poRefs + returnRefs > 0) {
+      throw new ApiError(
+        409,
+        'No se puede eliminar el producto: tiene ventas, órdenes de compra o devoluciones registradas'
+      );
+    }
+
+    // Hard delete per inventory spec ("THEN the item is removed"); Inventory
+    // rows cascade via onDelete: Cascade. The guard above guarantees no
+    // SaleItem/POItem/ReturnItem row points at this item.
+    await prisma.item.delete({ where: { id: itemId } });
   }
 
   // ─── Suppliers ──────────────────────────────────────────────────────────────
@@ -385,6 +534,48 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       address: created.address,
       isActive: created.isActive,
       createdAt: created.createdAt,
+    };
+  }
+
+  async updateSupplier(
+    tenantId: string,
+    supplierId: string,
+    input: UpdateSupplierInput
+  ): Promise<SupplierEntity> {
+    const existing = await prisma.supplier.findFirst({
+      where: { tenantId, id: supplierId },
+    });
+    if (!existing) {
+      throw new ApiError(404, 'Proveedor no encontrado');
+    }
+
+    const data: Prisma.SupplierUpdateInput = {};
+    if (input.name !== undefined) data.name = input.name;
+    if (input.contactName !== undefined) data.contactName = input.contactName;
+    if (input.phone !== undefined) data.phone = input.phone;
+    if (input.email !== undefined) data.email = input.email;
+    if (input.taxId !== undefined) data.taxId = input.taxId;
+    if (input.address !== undefined) data.address = input.address;
+    if (input.isActive !== undefined) data.isActive = input.isActive;
+
+    // Deactivation never touches existing POs (no cascade, no status change):
+    // createPurchaseOrder already rejects inactive suppliers server-side.
+    const updated = await prisma.supplier.update({
+      where: { id: supplierId },
+      data,
+    });
+
+    return {
+      id: updated.id,
+      tenantId: updated.tenantId,
+      name: updated.name,
+      contactName: updated.contactName,
+      phone: updated.phone,
+      email: updated.email,
+      taxId: updated.taxId,
+      address: updated.address,
+      isActive: updated.isActive,
+      createdAt: updated.createdAt,
     };
   }
 
@@ -1628,43 +1819,346 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     };
   }
 
-  async getSales(tenantId: string, limit = 100): Promise<SaleEntity[]> {
-    const rows = await prisma.sale.findMany({
-      where: { tenantId },
-      orderBy: { createdAt: 'desc' },
-      take: Math.min(Math.max(limit, 1), 500),
-      include: {
-        person: { select: { firstName: true, lastName: true } },
-        items: { include: { item: { select: { name: true } } } },
-      },
+  async getSales(
+    tenantId: string,
+    page = 1,
+    limit = 20
+  ): Promise<PaginatedResult<SaleEntity>> {
+    const skip = (page - 1) * limit;
+    const [rows, total] = await Promise.all([
+      prisma.sale.findMany({
+        where: { tenantId },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          person: { select: { firstName: true, lastName: true } },
+          items: { include: { item: { select: { name: true } } } },
+        },
+      }),
+      prisma.sale.count({ where: { tenantId } }),
+    ]);
+
+    return {
+      items: rows.map((s) => ({
+        id: s.id,
+        tenantId: s.tenantId,
+        cashSessionId: s.cashSessionId,
+        personId: s.personId,
+        customerName: s.person
+          ? `${s.person.firstName} ${s.person.lastName}`
+          : null,
+        subtotal: s.subtotal.toNumber(),
+        taxAmount: s.taxAmount.toNumber(),
+        discount: s.discount.toNumber(),
+        total: s.total.toNumber(),
+        paymentMethod: s.paymentMethod as PaymentMethod,
+        paidAmount: s.paidAmount.toNumber(),
+        balance: s.balance.toNumber(),
+        invoiceNumber: s.invoiceNumber,
+        status: s.status,
+        createdAt: s.createdAt,
+        notes: s.notes,
+        items: s.items.map((si) => ({
+          id: si.id,
+          itemId: si.itemId,
+          itemName: si.item.name,
+          quantity: si.quantity,
+          price: si.price.toNumber(),
+        })),
+      })),
+      page,
+      limit,
+      hasMore: page * limit < total,
+    };
+  }
+
+  // ─── P1: Sales returns (audited refunds / voids) ───────────────────────────
+  async createSaleReturn(
+    tenantId: string,
+    saleId: string,
+    input: CreateSaleReturnInput
+  ): Promise<SaleReturnEntity> {
+    // Merge duplicate item lines into single quantities (same pattern as registerSale).
+    const merged = new Map<string, number>();
+    for (const line of input.items) {
+      if (line.quantity <= 0 || !Number.isInteger(line.quantity)) {
+        throw new ApiError(400, 'Cantidad inválida en la devolución');
+      }
+      merged.set(line.itemId, (merged.get(line.itemId) ?? 0) + line.quantity);
+    }
+    const lines = [...merged.entries()].map(([itemId, quantity]) => ({
+      itemId,
+      quantity,
+    }));
+
+    return await prisma.$transaction(async (tx) => {
+      const sale = await tx.sale.findFirst({
+        where: { tenantId, id: saleId },
+        include: {
+          items: { include: { item: true } },
+          cashSession: { select: { branchId: true } },
+        },
+      });
+      if (!sale) {
+        throw new ApiError(404, 'Venta no encontrada');
+      }
+
+      // Every returned item must belong to the original sale.
+      for (const line of lines) {
+        if (!sale.items.some((si) => si.itemId === line.itemId)) {
+          throw new ApiError(
+            400,
+            `El producto "${line.itemId}" no pertenece a la venta`
+          );
+        }
+      }
+
+      // Over-return guard: cumulative across prior returns for this sale →
+      // 409 when the refunded qty would exceed the sold qty; stock unchanged
+      // because the whole transaction rolls back.
+      const priorReturns = await tx.saleReturnItem.findMany({
+        where: { return: { tenantId, saleId } },
+        select: { itemId: true, quantity: true },
+      });
+      const priorQtyByItem = new Map<string, number>();
+      for (const pr of priorReturns) {
+        priorQtyByItem.set(
+          pr.itemId,
+          (priorQtyByItem.get(pr.itemId) ?? 0) + pr.quantity
+        );
+      }
+
+      for (const line of lines) {
+        const saleItem = sale.items.find((si) => si.itemId === line.itemId)!;
+        const prior = priorQtyByItem.get(line.itemId) ?? 0;
+        if (prior + line.quantity > saleItem.quantity) {
+          throw new ApiError(
+            409,
+            `La cantidad a devolver supera la cantidad vendida de "${saleItem.item.name}"`
+          );
+        }
+      }
+
+      // Refund = sale-time price × qty (two-decimal rounding only on the total).
+      let totalRefund = 0;
+      for (const line of lines) {
+        const saleItem = sale.items.find((si) => si.itemId === line.itemId)!;
+        totalRefund += saleItem.price.toNumber() * line.quantity;
+      }
+      totalRefund = Math.round(totalRefund * 100) / 100;
+
+      // Stock restore: goods go back to the branch where they were sold.
+      const branchId = sale.cashSession?.branchId ?? null;
+      if (branchId) {
+        for (const line of lines) {
+          const result = await tx.inventory.updateMany({
+            where: { tenantId, branchId, itemId: line.itemId },
+            data: { stock: { increment: line.quantity } },
+          });
+          if (result.count === 0) {
+            const saleItem = sale.items.find((si) => si.itemId === line.itemId)!;
+            throw new ApiError(
+              400,
+              `No existe inventario para "${saleItem.item.name}" en la sucursal de la venta`
+            );
+          }
+        }
+      }
+
+      // Receivable adjustment: a refund on a credit sale reduces the
+      // outstanding balance; refund beyond the remaining balance is an
+      // overpay edge → 409 (the operator handles mixed cash/debt refunds
+      // manually; the balance can never go negative).
+      if (sale.balance.toNumber() > 0) {
+        const receivable = await tx.receivable.findFirst({
+          where: { tenantId, saleId },
+        });
+        if (receivable && receivable.balance.toNumber() > 0) {
+          if (totalRefund > receivable.balance.toNumber()) {
+            throw new ApiError(
+              409,
+              'La devolución supera el saldo pendiente de la cuenta por cobrar'
+            );
+          }
+          const newBalance =
+            Math.round((receivable.balance.toNumber() - totalRefund) * 100) / 100;
+          await tx.receivable.update({
+            where: { id: receivable.id },
+            data: {
+              balance: newBalance,
+              status: newBalance <= 0 ? 'PAID' : 'PARTIAL',
+            },
+          });
+        }
+      }
+
+      // Persist the audited return + line items (audit trail for the sale).
+      const saleReturn = await tx.saleReturn.create({
+        data: {
+          tenantId,
+          saleId: sale.id,
+          cashSessionId: sale.cashSessionId,
+          reason: input.reason ?? null,
+          totalRefund,
+          items: {
+            create: lines.map((l) => {
+              const saleItem = sale.items.find((si) => si.itemId === l.itemId)!;
+              return {
+                itemId: l.itemId,
+                quantity: l.quantity,
+                refundAmount: saleItem.price.toNumber() * l.quantity,
+              };
+            }),
+          },
+        },
+        include: {
+          items: { include: { item: { select: { name: true } } } },
+        },
+      });
+
+      return {
+        id: saleReturn.id,
+        tenantId: saleReturn.tenantId,
+        saleId: saleReturn.saleId,
+        saleNumber: sale.invoiceNumber,
+        cashSessionId: saleReturn.cashSessionId,
+        reason: saleReturn.reason,
+        totalRefund: saleReturn.totalRefund.toNumber(),
+        createdAt: saleReturn.createdAt,
+        items: saleReturn.items.map((si) => ({
+          id: si.id,
+          returnId: si.returnId,
+          itemId: si.itemId,
+          itemName: si.item.name,
+          quantity: si.quantity,
+          refundAmount: si.refundAmount.toNumber(),
+        })),
+      };
+    });
+  }
+
+  // ─── P1: Receivables (credit tracking + payments) ──────────────────────────
+  async getReceivables(
+    tenantId: string,
+    page = 1,
+    limit = 20,
+    status?: ReceivableStatus
+  ): Promise<PaginatedResult<ReceivableEntity>> {
+    const where: Prisma.ReceivableWhereInput = {
+      tenantId,
+      ...(status ? { status } : {}),
+    };
+    const skip = (page - 1) * limit;
+
+    const [rows, total] = await Promise.all([
+      prisma.receivable.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          person: { select: { firstName: true, lastName: true } },
+          payments: { orderBy: { createdAt: 'desc' } },
+        },
+      }),
+      prisma.receivable.count({ where }),
+    ]);
+
+    return {
+      items: rows.map((r) => ({
+        id: r.id,
+        tenantId: r.tenantId,
+        saleId: r.saleId,
+        personId: r.personId,
+        customerName: r.person
+          ? `${r.person.firstName} ${r.person.lastName}`
+          : null,
+        originalAmount: r.originalAmount.toNumber(),
+        balance: r.balance.toNumber(),
+        status: r.status as ReceivableStatus,
+        createdAt: r.createdAt,
+        payments: r.payments.map((p) => ({
+          id: p.id,
+          tenantId: p.tenantId,
+          receivableId: p.receivableId,
+          amount: p.amount.toNumber(),
+          method: p.method as PaymentMethod,
+          createdAt: p.createdAt,
+        })),
+      })),
+      page,
+      limit,
+      hasMore: page * limit < total,
+    };
+  }
+
+  async payReceivable(
+    tenantId: string,
+    receivableId: string,
+    input: PayReceivableInput
+  ): Promise<ReceivableEntity> {
+    const result = await prisma.$transaction(async (tx) => {
+      const receivable = await tx.receivable.findFirst({
+        where: { tenantId, id: receivableId },
+      });
+      if (!receivable) {
+        throw new ApiError(404, 'Cuenta por cobrar no encontrada');
+      }
+      if (input.amount <= 0) {
+        throw new ApiError(400, 'El monto del pago debe ser positivo');
+      }
+      // Overpay guard: a payment can never exceed the remaining balance → 409.
+      if (input.amount > receivable.balance.toNumber()) {
+        throw new ApiError(
+          409,
+          'El pago supera el saldo pendiente de la cuenta por cobrar'
+        );
+      }
+
+      const newBalance =
+        Math.round((receivable.balance.toNumber() - input.amount) * 100) / 100;
+      const status = newBalance <= 0 ? 'PAID' : 'PARTIAL';
+
+      await tx.receivablePayment.create({
+        data: {
+          tenantId,
+          receivableId,
+          amount: input.amount,
+          method: input.method,
+        },
+      });
+
+      return tx.receivable.update({
+        where: { id: receivableId },
+        data: { balance: newBalance, status },
+        include: {
+          person: { select: { firstName: true, lastName: true } },
+          payments: { orderBy: { createdAt: 'desc' } },
+        },
+      });
     });
 
-    return rows.map((s) => ({
-      id: s.id,
-      tenantId: s.tenantId,
-      cashSessionId: s.cashSessionId,
-      personId: s.personId,
-      customerName: s.person
-        ? `${s.person.firstName} ${s.person.lastName}`
+    return {
+      id: result.id,
+      tenantId: result.tenantId,
+      saleId: result.saleId,
+      personId: result.personId,
+      customerName: result.person
+        ? `${result.person.firstName} ${result.person.lastName}`
         : null,
-      subtotal: s.subtotal.toNumber(),
-      taxAmount: s.taxAmount.toNumber(),
-      discount: s.discount.toNumber(),
-      total: s.total.toNumber(),
-      paymentMethod: s.paymentMethod as PaymentMethod,
-      paidAmount: s.paidAmount.toNumber(),
-      balance: s.balance.toNumber(),
-      invoiceNumber: s.invoiceNumber,
-      status: s.status,
-      createdAt: s.createdAt,
-      notes: s.notes,
-      items: s.items.map((si) => ({
-        id: si.id,
-        itemId: si.itemId,
-        itemName: si.item.name,
-        quantity: si.quantity,
-        price: si.price.toNumber(),
+      originalAmount: result.originalAmount.toNumber(),
+      balance: result.balance.toNumber(),
+      status: result.status as ReceivableStatus,
+      createdAt: result.createdAt,
+      payments: result.payments.map((p) => ({
+        id: p.id,
+        tenantId: p.tenantId,
+        receivableId: p.receivableId,
+        amount: p.amount.toNumber(),
+        method: p.method as PaymentMethod,
+        createdAt: p.createdAt,
       })),
-    }));
+    };
   }
 }

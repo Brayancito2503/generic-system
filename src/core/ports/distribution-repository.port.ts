@@ -10,9 +10,13 @@ import type {
   FiscalSummary,
   InvoicingConfigEntity,
   InventoryStockItem,
+  PaginatedResult,
   PaymentMethod,
   PurchaseOrderEntity,
+  ReceivableEntity,
+  ReceivableStatus,
   SaleEntity,
+  SaleReturnEntity,
   SupplierEntity,
   TaxRateEntity,
 } from '@/core/entities/distribution';
@@ -35,6 +39,12 @@ export interface UpdateInventoryItemInput {
   price?: number;
   stock?: number;
   minAlert?: number;
+  /**
+   * Branch scope for stock writes. When provided, `stock`/`minAlert` apply ONLY
+   * to that branch's Inventory row (never `inventory[0]`); the branch must
+   * belong to the tenant (404) and must carry an inventory row (400).
+   */
+  branchId?: string;
 }
 
 export interface CreateSupplierInput {
@@ -44,6 +54,21 @@ export interface CreateSupplierInput {
   email?: string | null;
   taxId?: string | null;
   address?: string | null;
+}
+
+/**
+ * PATCH semantics: undefined fields are left untouched; null clears nullable
+ * contact fields. `isActive: false` deactivates the supplier (excluded from
+ * new PO selection server-side) while existing purchase orders stay intact.
+ */
+export interface UpdateSupplierInput {
+  name?: string;
+  contactName?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  taxId?: string | null;
+  address?: string | null;
+  isActive?: boolean;
 }
 
 export interface CreateEmployeeInput {
@@ -182,6 +207,23 @@ export interface RegisterSaleInput {
   paidAmount?: number;
 }
 
+// ─── P1 contracts: returns / receivables ─────────────────────────────────────
+
+export interface SaleReturnLineInput {
+  itemId: string;
+  quantity: number;
+}
+
+export interface CreateSaleReturnInput {
+  items: SaleReturnLineInput[];
+  reason?: string | null;
+}
+
+export interface PayReceivableInput {
+  amount: number;
+  method: PaymentMethod;
+}
+
 export interface IDistributionRepository {
   getDashboard(tenantId: string): Promise<DistributionDashboardStats>;
   getInventory(tenantId: string): Promise<InventoryStockItem[]>;
@@ -194,8 +236,24 @@ export interface IDistributionRepository {
     itemId: string,
     input: UpdateInventoryItemInput
   ): Promise<InventoryStockItem>;
+  /**
+   * Hard-deletes an item only when no persisted transaction references it
+   * (SaleItem / PurchaseOrderItem / SaleReturnItem); referenced items → 409,
+   * cross-tenant ids → 404. Inventory rows cascade with the Item.
+   */
+  deleteInventoryItem(tenantId: string, itemId: string): Promise<void>;
   getSuppliers(tenantId: string): Promise<SupplierEntity[]>;
   createSupplier(tenantId: string, input: CreateSupplierInput): Promise<SupplierEntity>;
+  /**
+   * PATCH semantics: undefined fields untouched, null clears nullable contact
+   * fields, `isActive: false` deactivates (existing POs remain intact — PO
+   * create already rejects inactive suppliers). 404 cross-tenant.
+   */
+  updateSupplier(
+    tenantId: string,
+    supplierId: string,
+    input: UpdateSupplierInput
+  ): Promise<SupplierEntity>;
   getPurchaseOrders(tenantId: string): Promise<PurchaseOrderEntity[]>;
   createPurchaseOrder(
     tenantId: string,
@@ -264,5 +322,46 @@ export interface IDistributionRepository {
     input: UpdateInvoicingConfigInput
   ): Promise<InvoicingConfigEntity>;
   registerSale(tenantId: string, input: RegisterSaleInput): Promise<SaleEntity>;
-  getSales(tenantId: string, limit?: number): Promise<SaleEntity[]>;
+  /**
+   * Paginated sales history (tenant-scoped). `page` 1-based; `limit` 1..100 —
+   * schema rejects out-of-bounds limits with 400, out-of-range pages return an
+   * empty `items` list with `hasMore: false`.
+   */
+  getSales(
+    tenantId: string,
+    page?: number,
+    limit?: number
+  ): Promise<PaginatedResult<SaleEntity>>;
+  /**
+   * Audited return/void for a sale: rejects over-return (refunded qty > sold
+   * qty, cumulative across prior returns) with 409, restores stock in the
+   * sale-branch inventory, adjusts the open receivable balance when the sale
+   * had credit (refund > remaining balance → 409), all in one transaction.
+   */
+  createSaleReturn(
+    tenantId: string,
+    saleId: string,
+    input: CreateSaleReturnInput
+  ): Promise<SaleReturnEntity>;
+  /**
+   * Paginated, tenant-scoped receivables list; optional OPEN/PARTIAL/PAID
+   * status filter. Same page/limit contract as `getSales`.
+   */
+  getReceivables(
+    tenantId: string,
+    page?: number,
+    limit?: number,
+    status?: ReceivableStatus
+  ): Promise<PaginatedResult<ReceivableEntity>>;
+  /**
+   * Applies a payment to a receivable: amount must be > 0 and ≤ the remaining
+   * balance (overpay → 409). Creates the ReceivablePayment, reduces the
+   * balance, and marks the receivable PARTIAL while a balance remains, PAID
+   * when it reaches zero. One transaction.
+   */
+  payReceivable(
+    tenantId: string,
+    receivableId: string,
+    input: PayReceivableInput
+  ): Promise<ReceivableEntity>;
 }

@@ -15,7 +15,7 @@ import {
   CheckCircle2,
   User,
 } from 'lucide-react';
-import type { InventoryStockItem, CustomerLight, SaleEntity, TaxRateEntity } from '../entities';
+import type { InventoryStockItem, CustomerLight, SaleEntity, TaxRateEntity, PaymentMethod } from '../entities';
 import { apiGet, apiSend } from '../api';
 
 const fmt = (n: number) => `C$ ${n.toLocaleString('es-NI', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -38,6 +38,8 @@ export function SalesPOSView() {
   const [customerQuery, setCustomerQuery] = useState('');
   const [customerId, setCustomerId] = useState<string>('');
   const [notes, setNotes] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
+  const [paidInput, setPaidInput] = useState('');
   const [success, setSuccess] = useState<SaleEntity | null>(null);
 
   const { data: items = [], isPending } = useQuery<InventoryStockItem[]>({
@@ -56,13 +58,20 @@ export function SalesPOSView() {
   });
 
   const registerSale = useMutation({
-    mutationFn: (payload: { lines: { itemId: string; quantity: number }[]; discount: number; personId: string | null; notes: string }) =>
-      apiSend<SaleEntity>(`/sales`, 'POST', payload),
+    mutationFn: (payload: {
+      lines: { itemId: string; quantity: number }[];
+      discount: number;
+      personId: string | null;
+      notes: string;
+      paymentMethod: PaymentMethod;
+      paidAmount: number;
+    }) => apiSend<SaleEntity>(`/sales`, 'POST', payload),
     onSuccess: (data) => {
       setSuccess(data);
       setCart([]);
       setDiscountInput('');
       setNotes('');
+      setPaidInput('');
       queryClient.invalidateQueries({ queryKey: ['inventory'] });
       queryClient.invalidateQueries({ queryKey: ['cash-session'] });
       queryClient.invalidateQueries({ queryKey: ['distribution-dashboard'] });
@@ -113,7 +122,27 @@ export function SalesPOSView() {
   const ratePct = defaultTaxRate?.rate ?? 0;
   const ivaAmount = ratePct > 0 ? ((subtotal - discount) * ratePct) / (100 + ratePct) : 0;
 
-  const canCheckout = cart.length > 0 && !registerSale.isPending;
+  const PAYMENT_LABEL_KEYS: Record<PaymentMethod, string> = {
+    CASH: 'sales.cash',
+    CARD: 'sales.card',
+    TRANSFER: 'sales.transfer',
+    CREDIT: 'sales.credit',
+  };
+
+  // Tender: only the received amount is client input; the server derives the
+  // balance (total − paidAmount) and opens the receivable inside the sale
+  // transaction. Change is a display readout of those server values.
+  const resolvedPaid =
+    paymentMethod === 'CREDIT'
+      ? 0
+      : paidInput.trim() === ''
+        ? total
+        : Math.max(parseFloat(paidInput) || 0, 0);
+  const previewChange = paymentMethod === 'CASH' && resolvedPaid > total ? resolvedPaid - total : 0;
+  const previewBalance = Math.max(total - resolvedPaid, 0);
+  const needsCustomer = previewBalance > 0 && !customerId;
+
+  const canCheckout = cart.length > 0 && !registerSale.isPending && !needsCustomer;
 
   const handleCheckout = () => {
     if (!canCheckout) return;
@@ -122,6 +151,8 @@ export function SalesPOSView() {
       discount,
       personId: customerId || null,
       notes,
+      paymentMethod,
+      paidAmount: resolvedPaid,
     });
   };
 
@@ -143,16 +174,27 @@ export function SalesPOSView() {
         <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 flex items-start gap-3 text-emerald-600 dark:text-emerald-400 text-sm">
           <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
           <div>
-            <p className="font-semibold text-emerald-700 dark:text-emerald-300">Venta registrada {success.invoiceNumber}</p>
-            <p className="text-emerald-600/80 dark:text-emerald-400/80">Total: {fmt(success.total)} — el inventario fue actualizado.</p>
+            <p className="font-semibold text-emerald-700 dark:text-emerald-300">
+              {t('sales.saleRegistered', { invoice: success.invoiceNumber ?? '' })}
+            </p>
+            <p className="text-emerald-600/80 dark:text-emerald-400/80">
+              {t('sales.inventoryUpdated', { total: fmt(success.total) })}
+            </p>
+            {success.balance > 0 && (
+              <p className="text-emerald-600/80 dark:text-emerald-400/80">
+                {t('sales.receivableCreated')} {t('sales.balanceDue')}: {fmt(success.balance)}
+              </p>
+            )}
           </div>
-          <button onClick={() => setSuccess(null)} className="ml-auto text-muted-foreground hover:text-foreground text-xs">Cerrar</button>
+          <button onClick={() => setSuccess(null)} className="ml-auto text-muted-foreground hover:text-foreground text-xs">
+            {t('sales.close')}
+          </button>
         </div>
       )}
 
       {registerSale.isError && (
         <div className="bg-destructive/10 border border-destructive/30 rounded-xl p-4 text-destructive text-sm">
-          {registerSale.error?.message ?? 'Error al registrar la venta'}
+          {registerSale.error?.message ?? t('sales.saleError')}
         </div>
       )}
 
@@ -193,13 +235,13 @@ export function SalesPOSView() {
                   <div className="mt-2 flex items-center justify-between">
                     <span className="text-base font-bold text-emerald-600 dark:text-emerald-400">{fmt(item.price)}</span>
                     <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${item.isLowStock ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' : 'bg-muted text-muted-foreground'}`}>
-                      Stock: {item.stock}
+                      {t('sales.stock', { count: item.stock })}
                     </span>
                   </div>
                 </button>
               ))}
               {filtered.length === 0 && (
-                <p className="col-span-full text-center py-10 text-muted-foreground text-sm">Sin resultados.</p>
+                <p className="col-span-full text-center py-10 text-muted-foreground text-sm">{t('sales.noResults')}</p>
               )}
             </div>
           )}
@@ -211,7 +253,7 @@ export function SalesPOSView() {
             <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
               <ShoppingCart className="w-4 h-4 text-emerald-500" /> {t('sales.cartTitle')}
             </h2>
-            <span className="text-xs text-muted-foreground">{cart.reduce((a, c) => a + c.quantity, 0)} ítems</span>
+            <span className="text-xs text-muted-foreground">{t('sales.itemsCount', { count: cart.reduce((a, c) => a + c.quantity, 0) })}</span>
           </div>
 
           {cart.length === 0 ? (
@@ -269,10 +311,43 @@ export function SalesPOSView() {
             </select>
           </div>
 
+          {/* Método de pago: efectivo (con vuelto) / tarjeta / transferencia / crédito */}
+          <div className="space-y-1.5">
+            <label className="block text-xs text-muted-foreground">{t('sales.paymentMethod')}</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(['CASH', 'CARD', 'TRANSFER', 'CREDIT'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => { setPaymentMethod(m); setPaidInput(''); }}
+                  className={`px-2 py-2 rounded-lg text-xs font-medium border transition-colors ${
+                    paymentMethod === m
+                      ? 'bg-primary text-primary-foreground border-primary font-semibold'
+                      : 'bg-background border-border text-muted-foreground hover:bg-accent hover:text-foreground'
+                  }`}
+                >
+                  {t(PAYMENT_LABEL_KEYS[m])}
+                </button>
+              ))}
+            </div>
+            {paymentMethod !== 'CREDIT' ? (
+              <input
+                type="number"
+                min="0"
+                value={paidInput}
+                onChange={(e) => setPaidInput(e.target.value)}
+                placeholder={fmt(total)}
+                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary"
+              />
+            ) : (
+              <p className="text-xs text-muted-foreground">{t('sales.creditHint')}</p>
+            )}
+          </div>
+
           {/* Descuento y notas */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-muted-foreground mb-1">Descuento (C$)</label>
+              <label className="block text-xs text-muted-foreground mb-1">{t('sales.discountLabel')}</label>
               <input
                 type="number"
                 min="0"
@@ -283,11 +358,11 @@ export function SalesPOSView() {
               />
             </div>
             <div>
-              <label className="block text-xs text-muted-foreground mb-1">Nota</label>
+              <label className="block text-xs text-muted-foreground mb-1">{t('sales.note')}</label>
               <input
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="Opcional"
+                placeholder={t('sales.noteOptional')}
                 className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary"
               />
             </div>
@@ -305,8 +380,26 @@ export function SalesPOSView() {
             </div>
             {discount > 0 && (
               <div className="flex justify-between text-amber-500">
-                <span>Descuento</span>
+                <span>{t('sales.discount')}</span>
                 <span>- {fmt(discount)}</span>
+              </div>
+            )}
+            {paymentMethod !== 'CREDIT' && (
+              <div className="flex justify-between text-muted-foreground">
+                <span>{t('sales.received')}</span>
+                <span className="font-medium text-foreground">{fmt(resolvedPaid)}</span>
+              </div>
+            )}
+            {previewChange > 0 && (
+              <div className="flex justify-between text-emerald-600 dark:text-emerald-400">
+                <span>{t('sales.change')}</span>
+                <span>{fmt(previewChange)}</span>
+              </div>
+            )}
+            {previewBalance > 0 && (
+              <div className="flex justify-between text-amber-500">
+                <span>{t('sales.balanceDue')}</span>
+                <span>{fmt(previewBalance)}</span>
               </div>
             )}
             <div className="flex justify-between text-foreground font-bold text-lg pt-1">
@@ -327,6 +420,11 @@ export function SalesPOSView() {
               <><Banknote className="w-4 h-4" /> {t('sales.processSale')}</>
             )}
           </button>
+          {needsCustomer && (
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              {t('sales.balanceRequiresCustomer')}
+            </p>
+          )}
         </div>
       </div>
     </div>

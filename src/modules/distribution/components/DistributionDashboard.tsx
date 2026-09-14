@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import {
@@ -26,21 +26,24 @@ const fmt = (n: number) =>
         currency: "NIO",
     }).format(n);
 
+/** Renders a real percentage point: leading + for gains, one decimal, 0.0% when flat. */
+const formatTrend = (pct: number) => `${pct > 0 ? "+" : ""}${pct.toFixed(1)}%`;
+
 function KpiCard({
     title,
     value,
     subtitle,
     icon: Icon,
-    trend,
-    trendUp,
+    trendPct,
+    extra,
     color,
 }: {
     title: string;
     value: string;
     subtitle: string;
     icon: React.ElementType;
-    trend?: string;
-    trendUp?: boolean;
+    trendPct?: number;
+    extra?: string;
     color: "emerald" | "blue" | "amber" | "violet" | "rose" | "cyan";
 }) {
     const colors = {
@@ -57,16 +60,22 @@ function KpiCard({
                 <div className={`p-2.5 rounded-lg border ${colors[color]}`}>
                     <Icon className="w-5 h-5" />
                 </div>
-                {trend && (
+                {trendPct !== undefined && (
                     <span
-                        className={`flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full ${trendUp ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-rose-500/10 text-rose-600 dark:text-rose-400"}`}
+                        className={`flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full ${
+                            trendPct > 0
+                                ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                : trendPct < 0
+                                  ? "bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                                  : "bg-muted text-muted-foreground"
+                        }`}
                     >
-                        {trendUp ? (
+                        {trendPct > 0 ? (
                             <ArrowUpRight className="w-3 h-3" />
-                        ) : (
+                        ) : trendPct < 0 ? (
                             <ArrowDownRight className="w-3 h-3" />
-                        )}
-                        {trend}
+                        ) : null}
+                        {formatTrend(trendPct)}
                     </span>
                 )}
             </div>
@@ -78,6 +87,9 @@ function KpiCard({
                     {title}
                 </p>
                 <p className="text-xs text-muted-foreground/70 mt-1">{subtitle}</p>
+                {extra && (
+                    <p className="text-[11px] text-muted-foreground/70 mt-0.5">{extra}</p>
+                )}
             </div>
         </div>
     );
@@ -110,7 +122,6 @@ function MiniBarChart({ data }: { data: { date: string; total: number }[] }) {
 
 export function DistributionDashboard() {
     const t = useTranslations("distributionModule");
-    const [activeTab, setActiveTab] = useState<"hoy" | "semana" | "mes">("hoy");
 
     const { data: stats, isPending, isError } = useQuery<DistributionDashboardStats>({
         queryKey: ["distribution-dashboard"],
@@ -120,7 +131,7 @@ export function DistributionDashboard() {
     if (isPending) {
         return (
             <div className="p-6 flex items-center justify-center py-24 text-muted-foreground gap-2">
-                <Loader2 className="w-5 h-5 animate-spin" /> {t("sales.processing")}
+                <Loader2 className="w-5 h-5 animate-spin" /> {t("dashboard.loading")}
             </div>
         );
     }
@@ -128,7 +139,7 @@ export function DistributionDashboard() {
     if (isError || !stats) {
         return (
             <div className="p-6 py-24 text-center text-destructive text-sm">
-                Error al cargar el dashboard.
+                {t("dashboard.loadError")}
             </div>
         );
     }
@@ -148,22 +159,6 @@ export function DistributionDashboard() {
                         {t("dashboard.subtitle")}
                     </p>
                 </div>
-                <div className="flex items-center gap-2">
-                    {(["hoy", "semana", "mes"] as const).map((tab) => (
-                        <button
-                            key={tab}
-                            type="button"
-                            onClick={() => setActiveTab(tab)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition-colors ${activeTab === tab ? "bg-primary text-primary-foreground font-semibold" : "bg-card text-muted-foreground border border-border hover:bg-accent hover:text-foreground"}`}
-                        >
-                            {tab === "hoy"
-                                ? "Hoy"
-                                : tab === "semana"
-                                  ? "Esta semana"
-                                  : "Este mes"}
-                        </button>
-                    ))}
-                </div>
             </div>
 
             {/* KPIs Grid */}
@@ -173,23 +168,29 @@ export function DistributionDashboard() {
                     value={fmt(stats.salesToday)}
                     subtitle={t("dashboard.kpiSalesSub")}
                     icon={TrendingUp}
-                    trend="+12.4%"
-                    trendUp
+                    trendPct={stats.trends.today.revenue}
+                    extra={t("dashboard.trendLine", {
+                        orders: formatTrend(stats.trends.today.orders),
+                        ticket: formatTrend(stats.trends.today.avgTicket),
+                    })}
                     color="emerald"
                 />
                 <KpiCard
-                    title="Ventas del Mes"
+                    title={t("dashboard.kpiMonthSales")}
                     value={fmt(stats.salesThisMonth)}
-                    subtitle="Acumulado del mes"
+                    subtitle={t("dashboard.kpiMonthSalesSub")}
                     icon={BarChart3}
-                    trend="+8.1%"
-                    trendUp
+                    trendPct={stats.trends.month.revenue}
+                    extra={t("dashboard.trendLine", {
+                        orders: formatTrend(stats.trends.month.orders),
+                        ticket: formatTrend(stats.trends.month.avgTicket),
+                    })}
                     color="blue"
                 />
                 <KpiCard
-                    title="En Caja"
+                    title={t("dashboard.cashInRegister")}
                     value={fmt(stats.cashInRegister)}
-                    subtitle="Efectivo disponible"
+                    subtitle={t("dashboard.cashInRegisterSub")}
                     icon={Banknote}
                     color="cyan"
                 />
@@ -205,8 +206,6 @@ export function DistributionDashboard() {
                     value={stats.lowStockItems.toString()}
                     subtitle={t("dashboard.kpiAlertsSub")}
                     icon={AlertTriangle}
-                    trend="!"
-                    trendUp={false}
                     color="amber"
                 />
                 <KpiCard
@@ -224,14 +223,14 @@ export function DistributionDashboard() {
                 <div className="lg:col-span-5 bg-card border border-border rounded-xl p-5 shadow-xs">
                     <h2 className="text-sm font-semibold text-foreground mb-1 flex items-center gap-2">
                         <BarChart3 className="w-4 h-4 text-emerald-500" />{" "}
-                        Ventas — Últimos 7 días
+                        {t("dashboard.salesWeekTitle")}
                     </h2>
                     <p className="text-xs text-muted-foreground mb-4">
-                        Monto vendido por día (C$)
+                        {t("dashboard.salesWeekSub")}
                     </p>
                     <MiniBarChart data={stats.salesByDay} />
                     <div className="mt-4 pt-3 border-t border-border flex items-center justify-between text-xs">
-                        <span className="text-muted-foreground">Total semana</span>
+                        <span className="text-muted-foreground">{t("dashboard.weekTotal")}</span>
                         <span className="font-semibold text-foreground">
                             {fmt(
                                 stats.salesByDay.reduce(
@@ -246,11 +245,11 @@ export function DistributionDashboard() {
                 {/* Productos más vendidos */}
                 <div className="lg:col-span-4 bg-card border border-border rounded-xl p-5 shadow-xs">
                     <h2 className="text-sm font-semibold text-foreground mb-1 flex items-center gap-2">
-                        <TrendingUp className="w-4 h-4 text-primary" /> Top 5
-                        Productos
+                        <TrendingUp className="w-4 h-4 text-primary" />{" "}
+                        {t("dashboard.topProductsTitle")}
                     </h2>
                     <p className="text-xs text-muted-foreground mb-4">
-                        Por ventas del mes
+                        {t("dashboard.topProductsSub")}
                     </p>
                     <div className="space-y-3">
                         {stats.topProducts.map((p, i) => (
@@ -263,7 +262,7 @@ export function DistributionDashboard() {
                                         {p.name}
                                     </p>
                                     <p className="text-[11px] text-muted-foreground">
-                                        {p.sold} unidades
+                                        {t("dashboard.unitsSold", { count: p.sold })}
                                     </p>
                                 </div>
                                 <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
@@ -281,17 +280,16 @@ export function DistributionDashboard() {
                         {t("dashboard.lowStockTitle")}
                     </h2>
                     <p className="text-xs text-muted-foreground mb-4">
-                        {stats.lowStockItems} producto(s) bajo mínimo
+                        {stats.lowStockItems} {t("dashboard.lowStockCount")}
                     </p>
                     <div className="space-y-2.5">
                         {stats.lowStockItems === 0 ? (
                             <p className="text-xs text-muted-foreground">
-                                Sin alertas de stock.
+                                {t("dashboard.noStockAlerts")}
                             </p>
                         ) : (
                             <p className="text-xs text-muted-foreground">
-                                Revisa la vista de inventario para ver los
-                                productos con stock bajo.
+                                {t("dashboard.checkInventory")}
                             </p>
                         )}
                     </div>
@@ -312,7 +310,7 @@ export function DistributionDashboard() {
                                     {t("dashboard.customer")}
                                 </th>
                                 <th className="text-right text-xs text-muted-foreground font-medium pb-3">
-                                    Ítems
+                                    {t("dashboard.items")}
                                 </th>
                                 <th className="text-right text-xs text-muted-foreground font-medium pb-3">
                                     {t("dashboard.total")}
