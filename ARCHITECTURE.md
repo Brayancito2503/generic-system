@@ -142,19 +142,28 @@ El esquema de datos central en `prisma/schema.prisma` se divide en bloques (ver 
    - **Gym**: `GymMembership`, `GymAccessLog`.
    - **Distribution**: `Supplier`, `PurchaseOrder`, `Employee`, `CashSession`, `CashMovement`, `TaxRate` (modelo fiscal IVA con `isDefault` único por Tenant y `isInclusive`).
 
-## 🚚 6. VERTICAL DE REFERENCIA: MÓDULO DISTRIBUCIÓN
+## 🔐 6. AUTENTICACIÓN Y SESIONES
+
+Sesión propia con JWT firmado HS256 (`jose`) en cookie `httpOnly` `gs_session` (7 días). Passwords y PIN POS hasheados con `bcryptjs` (nunca en texto plano).
+
+- **Flujo**: `POST /api/auth/login` (modes `admin`: email+password, `pos`: PIN) → firma payload `{ userId, tenantId, role, name, email }` y setea la cookie. `POST /api/auth/logout` la destruye. `GET /api/auth/me` expone el usuario actual.
+- **Middleware** (`middleware.ts`): compone `next-intl` + guard de sesión. Páginas públicas: raíz por locale y `/login`. Todo lo demás exige token válido → redirect a `/login`. Matcher excluye `api|_next|static`.
+- **Tenancy server-side (anti-spoofing)**: las rutas `/api/distribution/*` derivan `tenantId` de la sesión (`requireTenantId`/`requireApiAuth` en `src/lib/session.ts`) y responden `401` sin sesión. El cliente **NUNCA** envía `tenantId` en query ni body.
+- **Librerías**: `src/lib/session-token.ts` (edge-safe: firmar/verificar), `src/lib/session.ts` (`server-only`), `src/lib/security.ts` (bcrypt).
+- **Entorno**: `AUTH_SECRET` en `.env` (server exclusivamente; no exponer).
+
+## 🚚 7. VERTICAL DE REFERENCIA: MÓDULO DISTRIBUCIÓN
 
 Implementado de extremo a extremo como patrón para las demás verticales (dominio → puerto → adaptador → API → React Query → UI):
 
 ### Flujo de venta (POS)
-1. `page.tsx` resuelve el Tenant por `slug` (`distribuidora-sanjose`) y propaga `tenantId`.
-2. `SalesPOSView` consulta inventario y clientes (React Query); el carrito aplica descuento y cliente opcional.
-3. `POST /api/distribution/sales` → `registerSale`:
+1. `SalesPOSView` consulta inventario y clientes (React Query); el carrito aplica descuento y cliente opcional. La sesión (con `tenantId`) viaja solo en la cookie; cada ruta lo deriva en el servidor.
+2. `POST /api/distribution/sales` → `registerSale`:
    - Exige **sesión de caja abierta**.
    - Usa la **tasa default activa** del catálogo (IVA incluido: `taxAmount = base × tasa/(100+tasa)`).
    - Descuenta stock en una `$transaction` con guard `stock >= qty` (409 si no alcanza).
    - Genera correlativo `INV-YYYYMMDD-NNNNNN` vía `SaleCounter`, único por Tenant.
-4. Éxito: invalidación de consultas (inventario, caja, dashboard, resumen fiscal, historial).
+3. Éxito: invalidación de consultas (inventario, caja, dashboard, resumen fiscal, historial).
 
 ### Otras vistas conectadas
 - **Dashboard General**: ventas hoy/mes, top productos, abre/cierra caja.
@@ -166,5 +175,5 @@ Implementado de extremo a extremo como patrón para las demás verticales (domin
 
 ### Convenciones aplicadas
 - Vistas consumen `/api/distribution/*` con helpers tipados (`apiGet`/`apiSend` en `src/modules/distribution/api.ts`).
-- `tenantId` en **toda** query/repo (aislamiento estricto).
-- API de errores en español con códigos correctos (400/404/409).
+- `tenantId` en **toda** query/repo (aislamiento estricto), derivado server-side de la sesión.
+- API de errores en español con códigos correctos (400/401/404/409).

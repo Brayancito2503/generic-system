@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { Search, CheckCircle2, XCircle, UserCheck, ShieldAlert, Clock, RefreshCw } from 'lucide-react';
 import { MockGymRepository } from '@/infrastructure/db/repositories/mock-gym.repository';
 import { CheckInAccessUseCase } from '@/modules/gym/use-cases/check-in-access.use-case';
@@ -16,14 +16,14 @@ export function GymCheckInView({ tenantId = 'powerfit-gym' }: { tenantId?: strin
   const [logs, setLogs] = useState<Array<{ id: string; personName: string; granted: boolean; accessTime: Date; denialReason?: string | null }>>([]);
 
   // Cargar logs al montar
-  React.useEffect(() => {
-    fetchLogs();
-  }, []);
-
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     const recentLogs = await gymRepository.getRecentLogs(tenantId, 8);
     setLogs(recentLogs);
-  };
+  }, [tenantId]);
+
+  React.useEffect(() => {
+    fetchLogs();
+  }, [fetchLogs]);
 
   const handleCheckIn = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,7 +36,7 @@ export function GymCheckInView({ tenantId = 'powerfit-gym' }: { tenantId?: strin
       const res = await checkInUseCase.execute(tenantId, searchInput);
       setResult(res);
       await fetchLogs();
-    } catch (err) {
+    } catch {
       setResult({
         granted: false,
         message: 'Ocurrió un error al procesar el check-in.',

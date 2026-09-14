@@ -1,74 +1,190 @@
 {
     "homePage": {
-        "button": "Ordenar ahora",
-        "description": "El mejor restaurante en la ciudad",
-        "title": "Bienvenido a nuestro restaurante"
-    },
-    "menuPage": {
-        "button": "Ordenar ahora",
-        "description": "Nuestro menu",
-        "title": "Menu"
-    },
-    "contactPage": {
-        "button": "Ordenar ahora",
-        "description": "Contacto",
-        "title": "Contacto"
+        "description": "Motor SaaS multi-tenant de marca blanca para gestionar tu negocio.",
+        "login": "Iniciar sesión",
+        "title": "Generic System"
     },
     "loginPage": {
-        "adminLogin": "Inicio de sesión",
-        "description": "Ingrese sus credenciales para acceder al terminal.",
+        "adminLogin": "Administrador",
+        "description": "Ingrese sus credenciales para acceder al sistema.",
+        "emailLabel": "Correo electrónico",
+        "emailPlaceholder": "admin@distribuidora-sanjose.com",
+        "invalidPin": "PIN incorrecto",
+        "loginError": "Error al iniciar sesión",
+        "passwordLabel": "Contraseña",
+        "passwordPlaceholder": "••••••••",
         "posAccess": "Acceso POS",
+        "submit": "Iniciar sesión",
         "title": "Bienvenido de nuevo"
     },
     "sidebar": {
-        "admin": "Admin",
-        "customers": "Clientes",
         "dashboard": "Dashboard General",
         "distribution": "Distribuidora",
         "gym": "Gimnasio (GYM)",
-        "history": "Historial",
-        "invoices": "Facturas",
-        "kitchen": "Cocina",
         "language": {
             "default": "Idioma",
             "en": "Inglés",
             "es": "Español"
         },
         "logOut": "Cerrar sesión",
-        "orders": "Pedidos",
-        "playground": "Playground",
-        "settings": "Configuración",
-        "theme": "Tema",
-        "starred": "Favoritos"
+        "theme": {
+            "dark": "Oscuro",
+            "light": "Claro",
+            "system": "Sistema",
+            "title": "Tema"
+        }
     },
-    "kitchenPage": {
-        "title": "Pedidos en Cocina",
-        "liveBadge": "EN VIVO",
-        "subtitle": "Vista de alta prioridad • {count} Pedidos Activos",
-        "avgPrep": "Avg. Prep",
-        "tickets": "Tickets",
-        "filters": {
-            "all": "Todos",
-            "coldStation": "Estación Fría",
-            "grill": "Parrilla",
-            "desserts": "Postres"
+    "distributionModule": {
+        "header": {
+            "title": "Distribuidora San José",
+            "moduleBadge": "Módulo Distribución",
+            "branchInfo": "Sucursal Central Managua • Tenant: distribuidora-sanjose"
         },
-        "statuses": {
-            "pending": "PENDIENTE",
-            "new": "NUEVO",
-            "inProgress": "EN PROGRESO",
-            "ready": "LISTO"
+        "tabs": {
+            "dashboard": "Dashboard",
+            "inventory": "Inventario",
+            "sales": "Ventas POS",
+            "history": "Historial",
+            "cash": "Caja",
+            "suppliers": "Proveedores",
+            "employees": "Empleados",
+            "tax": "Impuestos"
         },
-        "card": {
-            "waiter": "Mesero",
-            "time": "Tiempo",
+        "dashboard": {
+            "title": "Dashboard General de Distribución",
+            "subtitle": "Visión consolidada de ventas, inventario y finanzas en tiempo real",
+            "kpiSales": "Ventas Hoy",
+            "kpiSalesSub": "vs. día anterior",
+            "kpiInventory": "Valor Inventario",
+            "kpiInventorySub": "productos registrados",
+            "kpiAlerts": "Alertas Stock",
+            "kpiAlertsSub": "por debajo del mínimo",
+            "kpiReceivables": "Cuentas por Cobrar",
+            "kpiReceivablesSub": "clientes activos",
+            "lowStockTitle": "Productos con Stock Bajo o Crítico",
+            "product": "Producto",
+            "sku": "SKU",
+            "stock": "Stock Actual",
+            "minAlert": "Mín. Requerido",
+            "status": "Estado",
+            "critical": "CRÍTICO",
+            "low": "BAJO",
+            "quickActions": "Acciones Rápidas",
+            "openPos": "Abrir Punto de Venta (POS)",
+            "registerMovement": "Registrar Movimiento de Caja",
+            "viewPurchaseOrders": "Ver Órdenes de Compra",
+            "recentSales": "Últimas Ventas Registradas",
+            "invoice": "Factura",
+            "customer": "Cliente",
             "total": "Total",
-            "startOrder": "Iniciar Orden",
-            "readyToServe": "Listo para Servir",
-            "recover": "Recuperar"
+            "date": "Fecha"
         },
-        "empty": {
-            "message": "Esperando nuevos pedidos..."
+        "inventory": {
+            "title": "Gestión de Inventario & Catálogo",
+            "subtitle": "Control centralizado de productos, existencias y precios",
+            "searchPlaceholder": "Buscar por nombre, SKU...",
+            "allCategories": "Todas las categorías",
+            "addProduct": "Nuevo Producto",
+            "colSku": "SKU",
+            "colName": "Producto",
+            "colCost": "Costo Unit.",
+            "colPrice": "Precio Venta",
+            "colStock": "Stock",
+            "colMinAlert": "Mín. Alerta",
+            "colStatus": "Estado",
+            "inStock": "En Stock",
+            "lowStock": "Stock Bajo",
+            "outOfStock": "Agotado"
+        },
+        "sales": {
+            "title": "Punto de Venta (POS)",
+            "subtitle": "Facturación rápida y gestión de carrito",
+            "searchProduct": "Buscar producto por SKU o nombre...",
+            "addToCart": "Agregar",
+            "cartTitle": "Resumen de Compra",
+            "emptyCart": "El carrito está vacío",
+            "subtotal": "Subtotal",
+            "tax": "Impuesto (15%)",
+            "total": "Total a Pagar",
+            "customerSelect": "Seleccionar Cliente",
+            "anonymous": "Cliente Contado / General",
+            "paymentMethod": "Método de Pago",
+            "cash": "Efectivo",
+            "card": "Tarjeta de Crédito / Débito",
+            "transfer": "Transferencia / Crédito",
+            "processSale": "Completar Venta & Facturar",
+            "processing": "Procesando venta..."
+        },
+        "history": {
+            "title": "Historial de Ventas",
+            "subtitle": "Registro de comprobantes y facturas emitidas",
+            "invoiceNumber": "N° Factura",
+            "customer": "Cliente",
+            "itemsCount": "Cant. Ítems",
+            "total": "Monto Total",
+            "status": "Estado",
+            "actions": "Acciones",
+            "viewDetails": "Ver Detalle",
+            "completed": "Completada"
+        },
+        "cash": {
+            "title": "Control de Caja & Movimientos",
+            "subtitle": "Gestión de sesiones de caja, ingresos y egresos",
+            "sessionStatus": "Estado de Sesión",
+            "open": "CAJA ABIERTA",
+            "closed": "CAJA CERRADA",
+            "openingAmount": "Monto de Apertura",
+            "currentBalance": "Saldo Actual en Caja",
+            "openBox": "Abrir Caja",
+            "closeBox": "Cerrar Caja",
+            "addIncome": "Ingreso Extra",
+            "addExpense": "Egreso / Gasto",
+            "movementsHistory": "Movimientos de la Sesión",
+            "concept": "Concepto",
+            "type": "Tipo",
+            "amount": "Monto",
+            "time": "Hora"
+        },
+        "suppliers": {
+            "title": "Proveedores & Órdenes de Compra",
+            "subtitle": "Administración de abastecimiento y pedidos",
+            "newSupplier": "Nuevo Proveedor",
+            "newOrder": "Nueva Orden de Compra",
+            "contact": "Contacto",
+            "phone": "Teléfono",
+            "taxId": "RUC / Cédula",
+            "orderNumber": "N° Orden",
+            "supplier": "Proveedor",
+            "orderStatus": "Estado",
+            "orderTotal": "Total",
+            "received": "RECIBIDO",
+            "pending": "PENDIENTE",
+            "ordered": "EN TRÁNSITO"
+        },
+        "employees": {
+            "title": "Empleados & Comisiones",
+            "subtitle": "Gestión de personal de ventas, cajas y almacén",
+            "newEmployee": "Nuevo Empleado",
+            "colName": "Empleado",
+            "colPosition": "Cargo",
+            "colDepartment": "Departamento",
+            "colSalary": "Salario Base",
+            "colCommission": "% Comisión",
+            "colStatus": "Estado",
+            "active": "Activo",
+            "inactive": "Inactivo"
+        },
+        "tax": {
+            "title": "Impuestos & Facturación CAI",
+            "subtitle": "Configuración de tasas tributarias y rangos de comprobantes",
+            "taxRatesTitle": "Tasas de Impuesto Registradas",
+            "name": "Impuesto",
+            "rate": "Tasa %",
+            "inclusive": "Incluido en Precio",
+            "isDefault": "Por Defecto",
+            "yes": "Sí",
+            "no": "No",
+            "active": "Activa"
         }
     }
 }

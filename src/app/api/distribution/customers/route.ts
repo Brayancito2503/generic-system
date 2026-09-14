@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireTenantId } from '@/lib/session';
 import { PrismaDistributionRepository } from '@/infrastructure/db/repositories/prisma-distribution.repository';
 
 const repository = new PrismaDistributionRepository();
 
 export async function GET(request: NextRequest) {
-  const tenantId = request.nextUrl.searchParams.get('tenantId');
+  const tenantId = await requireTenantId();
   if (!tenantId) {
-    return NextResponse.json({ error: 'tenantId es requerido' }, { status: 400 });
+    return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
   }
 
   try {

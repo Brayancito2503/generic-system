@@ -1,13 +1,9 @@
-import { ThemeToggle } from "@/components/ui/theme-toggle";
 import "./globals.css";
 import { Providers } from "@/app/[locale]/providers";
 import { hasLocale, NextIntlClientProvider } from "next-intl";
 import { notFound } from "next/navigation";
 import { routing } from "@/i18n/routing";
-import { SelectLanguage } from "@/components/ui/selectLanguage";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Sidebar } from "lucide-react";
-import MainWrapper from "@/components/MainWrapper";
 
 type Props = {
     children: React.ReactNode;

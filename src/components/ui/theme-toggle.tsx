@@ -3,6 +3,7 @@
 import * as React from "react"
 import { Moon, Sun } from "lucide-react"
 import { useTheme } from "next-themes"
+import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -12,39 +13,69 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
-export function ThemeToggle({ className, variant = "default", text = "Theme" }: { className?: string, variant?: "default" | "menuItem", text?: string }) {
-    const { setTheme, theme } = useTheme()
+export function ThemeToggle({
+    className,
+    variant = "default",
+    text,
+}: {
+    className?: string;
+    variant?: "default" | "menuItem";
+    text?: string;
+}) {
+    const { setTheme } = useTheme();
+    const t = useTranslations("sidebar.theme");
+    const [mounted, setMounted] = React.useState(false);
+
+    React.useEffect(() => {
+        setMounted(true);
+    }, []);
+
+    const displayText = text ?? t("title");
+
+    if (!mounted) {
+        return variant === "menuItem" ? (
+            <div className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm opacity-70">
+                <Sun className="h-4 w-4" />
+                <span className="flex-1 text-left">{displayText}</span>
+            </div>
+        ) : (
+            <Button variant="outline" size="icon" className={className} disabled>
+                <Sun className="h-[1.2rem] w-[1.2rem]" />
+                <span className="sr-only">{t("title")}</span>
+            </Button>
+        );
+    }
 
     return (
         <DropdownMenu>
             <DropdownMenuTrigger asChild className={className}>
                 {variant === "menuItem" ? (
-                    <div className="flex w-full cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground">
+                    <div className="flex w-full cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground">
                         <div className="relative flex h-4 w-4 items-center justify-center">
                             <Sun className="h-4 w-4 scale-100 rotate-0 transition-all dark:scale-0 dark:-rotate-90" />
                             <Moon className="absolute h-4 w-4 scale-0 rotate-90 transition-all dark:scale-100 dark:rotate-0" />
                         </div>
-                        <span className="flex-1 text-left">{text}</span>
+                        <span className="flex-1 text-left">{displayText}</span>
                     </div>
                 ) : (
                     <Button variant="outline" size="icon">
                         <Sun className="h-[1.2rem] w-[1.2rem] scale-100 rotate-0 transition-all dark:scale-0 dark:-rotate-90" />
                         <Moon className="absolute h-[1.2rem] w-[1.2rem] scale-0 rotate-90 transition-all dark:scale-100 dark:rotate-0" />
-                        <span className="sr-only">Toggle theme</span>
+                        <span className="sr-only">{t("title")}</span>
                     </Button>
                 )}
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => setTheme("light")}>
-                    Light
+                    {t("light")}
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setTheme("dark")}>
-                    Dark
+                    {t("dark")}
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setTheme("system")}>
-                    System
+                    {t("system")}
                 </DropdownMenuItem>
             </DropdownMenuContent>
         </DropdownMenu>
-    )
+    );
 }
