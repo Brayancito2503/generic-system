@@ -8,6 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "db:generate": "prisma generate",
     "db:seed": "node --env-file=.env prisma/seed.ts",
     "prepare": "husky"
@@ -20,6 +23,7 @@
     "@neondatabase/serverless": "^1.0.2",
     "@prisma/client": "5.22.0",
     "@tanstack/react-query": "^5.90.20",
+    "@wrksz/themes": "^1.2.0",
     "axios": "^1.13.3",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.3",
@@ -31,7 +35,6 @@
     "lucide-react": "^0.563.0",
     "next": "^16.1.6",
     "next-intl": "^4.8.2",
-    "next-themes": "^0.4.6",
     "postgres": "^3.4.8",
     "radix-ui": "^1.4.3",
     "react": "19.2.3",
@@ -45,14 +48,20 @@
     "@commitlint/cli": "^21.2.2",
     "@commitlint/config-conventional": "^21.2.2",
     "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
     "husky": "^9.1.7",
+    "jsdom": "^29.1.1",
     "prisma": "5.22.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.11"
   }
 }
