@@ -35,6 +35,26 @@ body {
   --color-info: var(--info);
 }
 
+/* Ocultar la barra de scroll en TODA la app (se mantiene el scroll: rueda, trackpad, táctil, teclado) */
+* {
+  scrollbar-width: none;         /* Firefox */
+  -ms-overflow-style: none;      /* IE / Edge antiguo (legacy) */
+}
+*::-webkit-scrollbar {
+  display: none;                 /* Chrome, Safari, Edge moderno (WebKit/Blink) */
+}
+
+@layer utilities {
+  .no-scrollbar {
+    overflow-y: auto;         /* 1. el scroll existe internamente */
+    scrollbar-width: none;    /* 2. Firefox */
+    -ms-overflow-style: none; /* 3. IE / Edge antiguo (legacy) */
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;            /* 4. Chrome, Safari, Edge moderno (WebKit/Blink) */
+  }
+}
+
 @layer base {
   :root {
     color-scheme: light;
