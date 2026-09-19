@@ -13,6 +13,12 @@ export interface SessionPayload {
   email: string;
 }
 
+const SESSION_ROLES: readonly string[] = ['SUPER_ADMIN', 'TENANT_ADMIN', 'STAFF', 'CUSTOMER'];
+
+function isSessionRole(role: string): role is SessionRole {
+  return SESSION_ROLES.includes(role);
+}
+
 function getSecret(): Uint8Array {
   const secret = process.env.AUTH_SECRET;
   if (!secret) {
@@ -42,10 +48,14 @@ export async function verifySessionToken(token: string): Promise<SessionPayload 
     ) {
       return null;
     }
+    const role = payload.role;
+    if (!isSessionRole(role)) {
+      return null;
+    }
     return {
       userId: payload.userId,
       tenantId: payload.tenantId,
-      role: payload.role as SessionRole,
+      role,
       name: typeof payload.name === 'string' ? payload.name : '',
       email: typeof payload.email === 'string' ? payload.email : '',
     };
