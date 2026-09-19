@@ -21,19 +21,32 @@ export function SelectLanguage({ className }: { className?: string }) {
     const changeLanguage = (locale: string) => {
         // Solo cambia si es diferente
         if (locale === currentLocale) return;
-        const newPathname = pathname.replace(`/${currentLocale}`, `/${locale}`)
-        router.push(newPathname)
+
+        // Regex anclada al inicio: `^/${currentLocale}(?=/|$)` — reemplaza SOLO
+        // el prefijo inicial del pathname. Evita (a) el no-op silencioso cuando
+        // el pathname no tiene prefijo de locale y (b) corromper un
+        // `/${currentLocale}` que aparece en mitad de ruta, ej. `/settings/es`
+        // (el replace suelto lo convertía en `/settings/en`).
+        const localePrefix = new RegExp(`^/${currentLocale}(?=/|$)`);
+        const newPathname = localePrefix.test(pathname)
+            ? pathname.replace(localePrefix, `/${locale}`)
+            : `/${locale}${pathname === '/' ? '' : pathname}`;
+
+        router.push(newPathname);
     }
 
     return (
         <DropdownMenu>
             <DropdownMenuTrigger asChild className={className}>
-                {/* Este div actúa como el trigger, igual que ThemeToggle usa Button */}
-                {/* Le damos clases para que parezca un elemento de menú de texto normal */}
-                <div className="flex w-auto cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground">
+                {/* Botón nativo en vez de div: operable por teclado y foco (Radix asChild clona los props de aria) */}
+                {/* Mantiene el mismo estilo de item de menú, igual que ThemeToggle usa Button */}
+                <button
+                    type="button"
+                    className="flex w-auto cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground"
+                >
                     <GlobeIcon className="size-4 shrink-0" />
                     <span className="flex-1 text-left">{t('language.default')} ({currentLocale.toUpperCase()})</span>
-                </div>
+                </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
                 <DropdownMenuItem
