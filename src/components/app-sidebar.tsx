@@ -17,6 +17,7 @@ import {
   Store,
   Dumbbell,
   Settings,
+  Shield,
 } from "lucide-react"
 
 import { useTranslations } from "next-intl"
@@ -83,6 +84,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       : []),
     ...(shell && (shell.role === 'TENANT_ADMIN' || shell.role === 'SUPER_ADMIN')
       ? [{ title: t('admin'), url: "/dashboard/modules/distribution/settings", icon: <Settings /> }]
+      : []),
+    // Platform scope: only the SUPER_ADMIN manages ALL tenants.
+    ...(shell && shell.role === 'SUPER_ADMIN'
+      ? [{ title: t('adminPortal'), url: "/dashboard/admin/tenants", icon: <Shield /> }]
       : []),
   ];
 

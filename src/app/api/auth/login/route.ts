@@ -30,6 +30,14 @@ export async function POST(request: NextRequest) {
       if (!user || !(await verifyPassword(body.password, user.passwordHash))) {
         return NextResponse.json({ error: 'Credenciales inválidas' }, { status: 401 });
       }
+      // Soft-deleted tenants (Tenant.active = false) must not authenticate:
+      // the SUPER_ADMIN toggle blocks access at the login boundary.
+      if (!(await isTenantActive(user.tenantId))) {
+        return NextResponse.json(
+          { error: 'Tenant desactivado. Contacte al administrador del sistema.' },
+          { status: 403 }
+        );
+      }
       session = toSession(user);
     } else {
       if (typeof body.pin !== 'string') {
@@ -37,17 +45,30 @@ export async function POST(request: NextRequest) {
       }
       const users = await prisma.user.findMany({
         where: { posPinHash: { not: null } },
-        include: { person: true },
+        include: {
+          person: true,
+          tenant: { select: { active: true } },
+        },
       });
       let matched: UserSessionShape | null = null;
       for (const u of users) {
+        // Skip PIN comparison for users of deactivated tenants: their PIN
+        // must not be probeable and they must never match (no acceso).
+        if (u.tenant?.active === false) continue;
         if (u.posPinHash && (await verifyPassword(body.pin, u.posPinHash))) {
           matched = u;
           break;
         }
       }
+      // Generic 401: do not reveal whether the PIN exists on an inactive tenant.
       if (!matched) {
-        return NextResponse.json({ error: 'PIN inválido' }, { status: 401 });
+        return NextResponse.json({ error: 'Credenciales inválidas' }, { status: 401 });
+      }
+      if (!(await isTenantActive(matched.tenantId))) {
+        return NextResponse.json(
+          { error: 'Tenant desactivado. Contacte al administrador del sistema.' },
+          { status: 403 }
+        );
       }
       session = toSession(matched);
     }
@@ -60,6 +81,19 @@ export async function POST(request: NextRequest) {
     console.error('[auth/login]', error);
     return NextResponse.json({ error: 'Error al iniciar sesión' }, { status: 500 });
   }
+}
+
+/**
+ * Login gate for the SUPER_ADMIN toggle contract: `Tenant.active = false`
+ * (soft-delete) blocks authentication. Defensive fallback: a user without a
+ * resolvable tenant row is also treated as blocked.
+ */
+async function isTenantActive(tenantId: string): Promise<boolean> {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { active: true },
+  });
+  return tenant?.active ?? false;
 }
 
 type UserSessionShape = {

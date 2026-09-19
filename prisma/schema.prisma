@@ -32,6 +32,7 @@ model Tenant {
   name      String
   industry  Industry @default(GENERIC)
   modules   String[] // ej: ["gym_memberships", "pos", "inventory"]
+  active    Boolean  @default(true) // false = tenant desactivado (soft-delete)
   settings  Json     @default("{}")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

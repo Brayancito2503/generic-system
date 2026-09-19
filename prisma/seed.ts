@@ -259,6 +259,23 @@ async function main() {
     },
   });
 
+  console.log('Creando usuario SUPER_ADMIN de plataforma...');
+  // Platform account: belongs to the demo tenant row but has global scope.
+  // Upsert guards against duplicates (the seed wipes tenants, so the create
+  // branch is the normal path; update keeps reruns idempotent anyway).
+  await prisma.user.upsert({
+    where: {
+      tenantId_email: { tenantId: tenant.id, email: 'superadmin@generic-system.com' },
+    },
+    update: { passwordHash: adminPassword },
+    create: {
+      tenantId: tenant.id,
+      email: 'superadmin@generic-system.com',
+      passwordHash: adminPassword,
+      role: 'SUPER_ADMIN',
+    },
+  });
+
   console.log('Creando clientes...');
   const customerRecords = [];
   for (const c of customers) {
@@ -403,6 +420,7 @@ async function main() {
   console.log('  - SaleCounter: 16 → próxima factura INV-…-000017 + CAI config por defecto');
   console.log('  - Usuarios demo: admin@distribuidora-sanjose.com / Admin123!');
   console.log('  - Usuario POS: cajero@distribuidora-sanjose.com / PIN 1234');
+  console.log('  - SUPER_ADMIN: superadmin@generic-system.com / Admin123!');
 }
 
 main()
