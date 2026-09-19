@@ -344,6 +344,16 @@ export interface IDistributionRepository {
     input: CreateSaleReturnInput
   ): Promise<SaleReturnEntity>;
   /**
+   * Paginated, tenant-scoped sales returns (audit list). Same page/limit
+   * contract as `getSales`; each return carries its sale number (`saleNumber`)
+   * and line items with names.
+   */
+  getSaleReturns(
+    tenantId: string,
+    page?: number,
+    limit?: number
+  ): Promise<PaginatedResult<SaleReturnEntity>>;
+  /**
    * Paginated, tenant-scoped receivables list; optional OPEN/PARTIAL/PAID
    * status filter. Same page/limit contract as `getSales`.
    */

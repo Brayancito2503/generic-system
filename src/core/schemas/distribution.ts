@@ -192,6 +192,12 @@ export const createSaleReturnSchema = z.object({
   reason: nullableText,
 });
 
+/** List query for `GET /returns`: tenant-scoped, paginated (same contract as sales/receivables). */
+export const saleReturnsListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
 /** List query for `GET /receivables`: tenant-scoped, paginated, optional status filter. */
 export const receivablesListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),

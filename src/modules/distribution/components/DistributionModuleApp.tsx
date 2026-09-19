@@ -13,12 +13,16 @@ import {
     ShoppingCart,
     History,
     Contact,
+    Undo2,
+    HandCoins,
 } from "lucide-react";
 import { DistributionDashboard } from "./DistributionDashboard";
 import { InventoryView } from "./InventoryView";
 import { CashRegisterView } from "./CashRegisterView";
 import { SalesPOSView } from "./SalesPOSView";
 import { SalesHistoryView } from "./SalesHistoryView";
+import { SalesReturnsView } from "./SalesReturnsView";
+import { ReceivablesView } from "./ReceivablesView";
 import { CustomersView } from "./CustomersView";
 import SuppliersView from "./SuppliersView";
 import EmployeesView from "./EmployeesView";
@@ -30,7 +34,9 @@ export type DistributionTab =
     | "inventory"
     | "sales"
     | "history"
+    | "returns"
     | "customers"
+    | "receivables"
     | "cash"
     | "suppliers"
     | "employees"
@@ -56,7 +62,9 @@ export default function DistributionModuleApp() {
         { id: "inventory", icon: Package },
         { id: "sales", icon: ShoppingCart },
         { id: "history", icon: History },
+        { id: "returns", icon: Undo2 },
         { id: "customers", icon: Contact },
+        { id: "receivables", icon: HandCoins },
         { id: "cash", icon: Banknote },
         { id: "suppliers", icon: Truck },
         { id: "employees", icon: Users },
@@ -85,7 +93,7 @@ export default function DistributionModuleApp() {
                 </div>
 
                 {/* Quick Nav Badges */}
-                <div className="hidden sm:flex items-center gap-1.5 bg-muted/50 p-1 rounded-lg border border-border">
+                <div className="hidden sm:flex items-center gap-1.5 bg-muted/50 p-1 rounded-lg border border-border overflow-x-auto">
                     {navItems.map((item) => {
                         const Icon = item.icon;
                         const isActive = activeTab === item.id;
@@ -113,7 +121,9 @@ export default function DistributionModuleApp() {
                 {activeTab === "inventory" && <InventoryView />}
                 {activeTab === "sales" && <SalesPOSView />}
                 {activeTab === "history" && <SalesHistoryView />}
+                {activeTab === "returns" && <SalesReturnsView />}
                 {activeTab === "customers" && <CustomersView />}
+                {activeTab === "receivables" && <ReceivablesView />}
                 {activeTab === "cash" && <CashRegisterView />}
                 {activeTab === "suppliers" && <SuppliersView />}
                 {activeTab === "employees" && <EmployeesView />}

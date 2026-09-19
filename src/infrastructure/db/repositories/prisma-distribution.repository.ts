@@ -1874,6 +1874,51 @@ export class PrismaDistributionRepository implements IDistributionRepository {
   }
 
   // ─── P1: Sales returns (audited refunds / voids) ───────────────────────────
+  async getSaleReturns(
+    tenantId: string,
+    page = 1,
+    limit = 20
+  ): Promise<PaginatedResult<SaleReturnEntity>> {
+    const skip = (page - 1) * limit;
+    const [rows, total] = await Promise.all([
+      prisma.saleReturn.findMany({
+        where: { tenantId },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          sale: { select: { invoiceNumber: true } },
+          items: { include: { item: { select: { name: true } } } },
+        },
+      }),
+      prisma.saleReturn.count({ where: { tenantId } }),
+    ]);
+
+    return {
+      items: rows.map((r) => ({
+        id: r.id,
+        tenantId: r.tenantId,
+        saleId: r.saleId,
+        saleNumber: r.sale.invoiceNumber,
+        cashSessionId: r.cashSessionId,
+        reason: r.reason,
+        totalRefund: r.totalRefund.toNumber(),
+        createdAt: r.createdAt,
+        items: r.items.map((si) => ({
+          id: si.id,
+          returnId: si.returnId,
+          itemId: si.itemId,
+          itemName: si.item.name,
+          quantity: si.quantity,
+          refundAmount: si.refundAmount.toNumber(),
+        })),
+      })),
+      page,
+      limit,
+      hasMore: page * limit < total,
+    };
+  }
+
   async createSaleReturn(
     tenantId: string,
     saleId: string,
