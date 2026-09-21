@@ -93,9 +93,13 @@ function relativeTime(date: Date): string {
   const diffMin = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
   if (diffMin < 1) return 'hace un momento';
   if (diffMin < 60) return `hace ${diffMin} min`;
-  const hours = Math.floor(diffMin / 60);
-  const minutes = diffMin % 60;
-  return minutes > 0 ? `hace ${hours}h ${minutes}min` : `hace ${hours}h`;
+  // Auto-scale by magnitude: hours for the first day, days for the first week,
+  // then the calendar date — "hace 266h" stops making sense after a while.
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `hace ${diffHours}h`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return diffDays === 1 ? 'hace 1 día' : `hace ${diffDays} días`;
+  return `${date.getDate()}/${date.getMonth() + 1}/${date.getFullYear()}`;
 }
 
 /** Money rounding to 2 decimals (Decimal.toNumber() float math never leaks extra digits). */
