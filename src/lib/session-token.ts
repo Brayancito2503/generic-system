@@ -3,7 +3,13 @@ import { SignJWT, jwtVerify } from 'jose';
 export const SESSION_COOKIE = 'gs_session';
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7; // 7 días
 
-export type SessionRole = 'SUPER_ADMIN' | 'TENANT_ADMIN' | 'STAFF' | 'CUSTOMER';
+export type SessionRole =
+  | 'SUPER_ADMIN'
+  | 'TENANT_ADMIN'
+  | 'STAFF'
+  | 'CUSTOMER'
+  | 'CASHIER'
+  | 'ACCOUNTANT';
 
 export interface SessionPayload {
   userId: string;
@@ -13,7 +19,14 @@ export interface SessionPayload {
   email: string;
 }
 
-const SESSION_ROLES: readonly string[] = ['SUPER_ADMIN', 'TENANT_ADMIN', 'STAFF', 'CUSTOMER'];
+const SESSION_ROLES: readonly string[] = [
+  'SUPER_ADMIN',
+  'TENANT_ADMIN',
+  'STAFF',
+  'CUSTOMER',
+  'CASHIER',
+  'ACCOUNTANT',
+];
 
 function isSessionRole(role: string): role is SessionRole {
   return SESSION_ROLES.includes(role);

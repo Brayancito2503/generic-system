@@ -26,9 +26,14 @@ import type {
   PayReceivableInput,
 } from '@/core/ports/distribution-repository.port';
 import type {
+  AccessRole,
   CashMovementEntity,
   CashSessionEntity,
   CustomerLight,
+  DailyCloseCollection,
+  DailyCloseLine,
+  DailyClosePaymentBreakdown,
+  DailyCloseReport,
   DashboardTrend,
   DistributionDashboardStats,
   EmployeeEntity,
@@ -52,6 +57,24 @@ interface EmployeePersonMetadata {
   commissionRate?: number;
 }
 
+/**
+ * Access profile → session Role: CASHIER/ACCOUNTANT keep their profile,
+ * MANAGER maps to the existing TENANT_ADMIN session role, and a null profile
+ * (legacy full access) keeps STAFF so migration never locks anyone out.
+ */
+function userRoleForAccessRole(accessRole: AccessRole | null | undefined) {
+  switch (accessRole) {
+    case 'CASHIER':
+      return 'CASHIER' as const;
+    case 'ACCOUNTANT':
+      return 'ACCOUNTANT' as const;
+    case 'MANAGER':
+      return 'TENANT_ADMIN' as const;
+    default:
+      return 'STAFF' as const;
+  }
+}
+
 /** Employee row with its Person graph, shared by the entity mapper methods. */
 type EmployeeWithPerson = Prisma.EmployeeGetPayload<{ include: { person: true } }>;
 
@@ -73,6 +96,44 @@ function relativeTime(date: Date): string {
   const hours = Math.floor(diffMin / 60);
   const minutes = diffMin % 60;
   return minutes > 0 ? `hace ${hours}h ${minutes}min` : `hace ${hours}h`;
+}
+
+/** Money rounding to 2 decimals (Decimal.toNumber() float math never leaks extra digits). */
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/** Reads `item.attributes.uom` (JSONB) with a safe typed access — no `any`. */
+function itemUom(attributes: Prisma.JsonValue): string | null {
+  if (attributes === null || typeof attributes !== 'object' || Array.isArray(attributes)) {
+    return null;
+  }
+  const uom = (attributes as Record<string, unknown>).uom;
+  return typeof uom === 'string' && uom.trim() !== '' ? uom : null;
+}
+
+/**
+ * Next auto-generated SKU for a tenant: scans existing `SKU-<N>` codes and
+ * returns the first free one (`SKU-0001`, `SKU-0002`, ...). The sequence
+ * re-checks each candidate because a manual SKU may collide with it.
+ * Operator never invents codes; the POS gets a stable scan target.
+ */
+async function nextItemSku(tenantId: string): Promise<string> {
+  const rows = await prisma.item.findMany({
+    where: { tenantId, sku: { startsWith: 'SKU-' } },
+    select: { sku: true },
+  });
+  let max = 0;
+  for (const row of rows) {
+    const n = Number(row.sku?.slice(4));
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  let candidate = '';
+  do {
+    max += 1;
+    candidate = `SKU-${String(max).padStart(4, '0')}`;
+  } while (await prisma.item.findFirst({ where: { tenantId, sku: candidate } }));
+  return candidate;
 }
 
 /**
@@ -325,15 +386,19 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       throw new Error('El tenant no tiene sucursales configuradas');
     }
 
-    if (input.sku) {
-      const existingSku = await prisma.item.findFirst({ where: { tenantId, sku: input.sku } });
+    let sku: string | null = input.sku || null;
+    if (sku) {
+      const existingSku = await prisma.item.findFirst({ where: { tenantId, sku } });
       if (existingSku) throw new Error('El SKU ya existe');
+    } else {
+      // Auto-generated SKU per tenant: the operator never invents codes.
+      sku = await nextItemSku(tenantId);
     }
 
     const item = await prisma.item.create({
       data: {
         tenantId,
-        sku: input.sku || null,
+        sku,
         name: input.name,
         description: input.description || null,
         cost: input.cost,
@@ -888,6 +953,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         personId: person.id,
         branchId: input.branchId || null,
         position: input.role,
+        accessRole: input.accessRole ?? null,
         salary: input.salary ?? null,
         hireDate: input.hireDate,
         isActive: true,
@@ -904,6 +970,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       phone: person.phone,
       branchId: employee.branchId,
       role: employee.position,
+      accessRole: employee.accessRole,
       department: input.department ?? null,
       salary: employee.salary?.toNumber() ?? null,
       commissionRate: input.commissionRate ?? null,
@@ -989,6 +1056,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
 
       const employeeData: Prisma.EmployeeUncheckedUpdateInput = {};
       if (input.role !== undefined) employeeData.position = input.role;
+      if (input.accessRole !== undefined) employeeData.accessRole = input.accessRole;
       if (input.salary !== undefined) employeeData.salary = input.salary;
       if (input.hireDate !== undefined) employeeData.hireDate = input.hireDate;
       if (input.isActive !== undefined) employeeData.isActive = input.isActive;
@@ -1004,6 +1072,17 @@ export class PrismaDistributionRepository implements IDistributionRepository {
             posPinHash: { not: null },
           },
           data: { posPinHash: null },
+        });
+      }
+
+      // The linked User's session role mirrors the employee's access profile:
+      // a profile change re-derives it without requiring a PIN re-link, so
+      // route guards always reflect the current profile. CASHIER/ACCOUNTANT
+      // keep their profile role, MANAGER → TENANT_ADMIN, null → legacy STAFF.
+      if (input.accessRole !== undefined && !linkPin) {
+        await tx.user.updateMany({
+          where: { tenantId, personId: employee.personId },
+          data: { role: userRoleForAccessRole(input.accessRole) },
         });
       }
 
@@ -1023,16 +1102,24 @@ export class PrismaDistributionRepository implements IDistributionRepository {
             ? employee.person.email
             : `${employee.personId}@pos.local`;
 
+        // The User account mirrors the employee's access profile: the session
+        // role is derived from accessRole (CASHIER/ACCOUNTANT keep it,
+        // MANAGER → TENANT_ADMIN, null → legacy STAFF) so the PIN grants
+        // exactly the permissions of the profile, never more. When a re-link
+        // omits accessRole, the employee's persisted profile is used instead
+        // of downgrading to STAFF.
+        const userRole = userRoleForAccessRole(input.accessRole ?? employee.accessRole);
+
         await tx.user.upsert({
           where: { personId: employee.personId },
-          update: { posPinHash },
+          update: { posPinHash, role: userRole },
           create: {
             tenantId,
             personId: employee.personId,
             email: emailForUser,
             passwordHash: newUserPasswordHash!,
             posPinHash,
-            role: 'STAFF',
+            role: userRole,
           },
         });
       }
@@ -1059,6 +1146,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       phone: e.person.phone,
       branchId: e.branchId,
       role: e.position,
+      accessRole: e.accessRole,
       department: meta.department ?? null,
       salary: e.salary?.toNumber() ?? null,
       commissionRate: meta.commissionRate ?? null,
@@ -1765,6 +1853,9 @@ export class PrismaDistributionRepository implements IDistributionRepository {
                 itemId: item.id,
                 quantity: l.quantity,
                 price: item.price,
+                // Cost snapshot at sale time: daily close margins stay
+                // accurate even when Item.cost changes later.
+                cost: item.cost,
               };
             }),
           },
@@ -2204,6 +2295,123 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         method: p.method as PaymentMethod,
         createdAt: p.createdAt,
       })),
+    };
+  }
+
+  async getDailyCloseReport(tenantId: string, date: string): Promise<DailyCloseReport> {
+    // Calendar day in America/Managua (UTC-6): the report groups by the tills'
+    // local day, never the server timezone. `date` is a strict YYYY-MM-DD
+    // string validated by the route schema before reaching the repository.
+    const start = new Date(`${date}T00:00:00-06:00`);
+    const end = new Date(`${date}T23:59:59.999-06:00`);
+
+    const [sales, payments] = await Promise.all([
+      prisma.sale.findMany({
+        where: {
+          tenantId,
+          status: 'COMPLETED',
+          createdAt: { gte: start, lte: end },
+        },
+        include: { items: { include: { item: true } } },
+      }),
+      prisma.receivablePayment.findMany({
+        where: { tenantId, createdAt: { gte: start, lte: end } },
+        include: { receivable: { include: { person: true } } },
+      }),
+    ]);
+
+    // Aggregate the day's lines by item: totals come from the cost snapshot
+    // written at sale time (SaleItem.cost), never the live Item.cost.
+    const linesById = new Map<
+      string,
+      {
+        itemName: string;
+        uom: string | null;
+        quantity: number;
+        lineCost: number;
+        lineRevenue: number;
+      }
+    >();
+    for (const sale of sales) {
+      for (const si of sale.items) {
+        const cost = si.cost.toNumber();
+        const price = si.price.toNumber();
+        const line =
+          linesById.get(si.itemId) ?? {
+            itemName: si.item.name,
+            uom: itemUom(si.item.attributes),
+            quantity: 0,
+            lineCost: 0,
+            lineRevenue: 0,
+          };
+        line.quantity += si.quantity;
+        line.lineCost += cost * si.quantity;
+        line.lineRevenue += price * si.quantity;
+        linesById.set(si.itemId, line);
+      }
+    }
+
+    const lines: DailyCloseLine[] = [...linesById.values()]
+      .map((l) => {
+        const lineCost = round2(l.lineCost);
+        const lineRevenue = round2(l.lineRevenue);
+        return {
+          itemName: l.itemName,
+          uom: l.uom,
+          quantity: l.quantity,
+          costUnit: l.quantity > 0 ? round2(lineCost / l.quantity) : 0,
+          priceUnit: l.quantity > 0 ? round2(lineRevenue / l.quantity) : 0,
+          lineCost,
+          lineRevenue,
+          margin: round2(lineRevenue - lineCost),
+        };
+      })
+      .sort((a, b) => b.lineRevenue - a.lineRevenue);
+
+    const lineAgg = lines.reduce(
+      (acc, l) => ({
+        cost: round2(acc.cost + l.lineCost),
+        revenue: round2(acc.revenue + l.lineRevenue),
+        margin: round2(acc.margin + l.margin),
+      }),
+      { cost: 0, revenue: 0, margin: 0 }
+    );
+    const totals: DailyCloseReport['totals'] = {
+      ...lineAgg,
+      taxAmount: round2(sales.reduce((acc, s) => acc + s.taxAmount.toNumber(), 0)),
+      discount: round2(sales.reduce((acc, s) => acc + s.discount.toNumber(), 0)),
+    };
+
+    const byMethod = new Map<string, { count: number; total: number }>();
+    for (const sale of sales) {
+      const entry = byMethod.get(sale.paymentMethod) ?? { count: 0, total: 0 };
+      entry.count += 1;
+      entry.total = round2(entry.total + sale.total.toNumber());
+      byMethod.set(sale.paymentMethod, entry);
+    }
+    const paymentBreakdown: DailyClosePaymentBreakdown[] = [...byMethod.entries()].map(
+      ([method, v]) => ({ method, count: v.count, total: v.total })
+    );
+
+    const collections: DailyCloseCollection[] = payments.map((p) => ({
+      customerName: p.receivable.person
+        ? `${p.receivable.person.firstName} ${p.receivable.person.lastName}`.trim()
+        : 'Cliente',
+      amount: p.amount.toNumber(),
+      method: p.method,
+      createdAt: p.createdAt.toISOString(),
+    }));
+    const collectionsTotal = round2(
+      collections.reduce((acc, c) => acc + c.amount, 0)
+    );
+
+    return {
+      date,
+      lines,
+      totals,
+      paymentBreakdown,
+      collections,
+      collectionsTotal,
     };
   }
 }

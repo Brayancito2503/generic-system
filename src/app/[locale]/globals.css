@@ -189,6 +189,27 @@ body {
   transition: background-color 0.15s ease-in-out;
 }
 
+/* Print: the daily close report is the ONLY thing that prints (sidebar, nav
+   and report controls are hidden via the visibility technique — layout boxes
+   stay invisible instead of collapsing). */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #daily-close-print,
+  #daily-close-print * {
+    visibility: visible;
+  }
+  #daily-close-print {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+  }
+  .print-only {
+    display: block !important;
+  }
+}
+
 @theme inline {
   --font-sans: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);

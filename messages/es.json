@@ -130,7 +130,8 @@
             "cash": "Caja",
             "suppliers": "Proveedores",
             "employees": "Empleados",
-            "tax": "Impuestos"
+            "tax": "Impuestos",
+            "reportes": "Reportes"
         },
         "dashboard": {
             "title": "Dashboard General de Distribución",
@@ -531,6 +532,13 @@
             "loading": "Cargando empleados...",
             "noRole": "Sin cargo",
             "noDepartment": "General",
+            "colAccessRole": "Acceso",
+            "accessRole": "Acceso de aplicación",
+            "accessRoleNone": "Acceso completo",
+            "accessRoleCashier": "Cajero",
+            "accessRoleAccountant": "Contabilidad",
+            "accessRoleManager": "Gerente",
+            "accessRoleHint": "Define qué módulos podrá usar el empleado. Sin perfil de acceso: conserva el acceso completo.",
             "colActions": "Acciones",
             "edit": "Editar",
             "assignPin": "Asignar PIN",
@@ -621,6 +629,34 @@
             "saved": "Configuración guardada exitosamente.",
             "saveError": "Error al guardar la configuración.",
             "invalidName": "El nombre del tenant no puede estar vacío."
+        },
+        "reports": {
+            "title": "Cierre Diario",
+            "subtitle": "Resumen de ventas, márgenes y cobros del día",
+            "dateLabel": "Fecha",
+            "print": "Imprimir",
+            "product": "Producto",
+            "uom": "U/M",
+            "quantity": "Cantidad",
+            "costUnit": "Costo C/U",
+            "priceUnit": "P. Venta",
+            "lineCost": "Total Costo",
+            "lineRevenue": "Total Venta",
+            "margin": "MG",
+            "totals": "Totales",
+            "totalSales": "Total Ventas",
+            "totalCost": "Total Costo",
+            "grossMargin": "Margen Bruto",
+            "collectionsTotal": "Cobros de Fiados",
+            "paymentsTitle": "Desglose por Método de Pago",
+            "collectionsTitle": "Cobros de Fiados del Día",
+            "customer": "Cliente",
+            "method": "Método",
+            "amount": "Monto",
+            "time": "Hora",
+            "empty": "No hay ventas para esta fecha",
+            "loading": "Cargando reporte...",
+            "error": "Error al cargar el reporte."
         }
     }
 }

@@ -32,7 +32,14 @@ async function signRaw(payload: Record<string, unknown>): Promise<string> {
     .sign(TEST_SECRET);
 }
 
-const ALL_ROLES: SessionRole[] = ['SUPER_ADMIN', 'TENANT_ADMIN', 'STAFF', 'CUSTOMER'];
+const ALL_ROLES: SessionRole[] = [
+  'SUPER_ADMIN',
+  'TENANT_ADMIN',
+  'STAFF',
+  'CUSTOMER',
+  'CASHIER',
+  'ACCOUNTANT',
+];
 
 describe('signSession', () => {
   it('signs a token that round-trips through verifySessionToken with all fields intact', async () => {

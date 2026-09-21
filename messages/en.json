@@ -130,7 +130,8 @@
             "cash": "Cash Register",
             "suppliers": "Suppliers",
             "employees": "Employees",
-            "tax": "Taxation"
+            "tax": "Taxation",
+            "reportes": "Reports"
         },
         "dashboard": {
             "title": "General Distribution Dashboard",
@@ -531,6 +532,13 @@
             "loading": "Loading employees...",
             "noRole": "No role",
             "noDepartment": "General",
+            "colAccessRole": "Access",
+            "accessRole": "App Access",
+            "accessRoleNone": "Full access",
+            "accessRoleCashier": "Cashier",
+            "accessRoleAccountant": "Accountant",
+            "accessRoleManager": "Manager",
+            "accessRoleHint": "Defines which modules the employee can use. No access profile: keeps full access.",
             "colActions": "Actions",
             "edit": "Edit",
             "assignPin": "Assign PIN",
@@ -621,6 +629,34 @@
             "saved": "Settings saved successfully.",
             "saveError": "Error saving the settings.",
             "invalidName": "The tenant name cannot be empty."
+        },
+        "reports": {
+            "title": "Daily Close",
+            "subtitle": "Daily sales, margins and collections summary",
+            "dateLabel": "Date",
+            "print": "Print",
+            "product": "Product",
+            "uom": "U/M",
+            "quantity": "Qty",
+            "costUnit": "Cost/Unit",
+            "priceUnit": "Sale Price",
+            "lineCost": "Total Cost",
+            "lineRevenue": "Total Revenue",
+            "margin": "Margin",
+            "totals": "Totals",
+            "totalSales": "Total Sales",
+            "totalCost": "Total Cost",
+            "grossMargin": "Gross Margin",
+            "collectionsTotal": "Credit Collections",
+            "paymentsTitle": "Payment Method Breakdown",
+            "collectionsTitle": "Day's Credit Collections",
+            "customer": "Customer",
+            "method": "Method",
+            "amount": "Amount",
+            "time": "Time",
+            "empty": "No sales for this date",
+            "loading": "Loading report...",
+            "error": "Error loading the report."
         }
     }
 }

@@ -8,7 +8,11 @@ const repository = new PrismaDistributionRepository();
 
 export async function GET(request: NextRequest) {
   try {
-    await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
+    // Read-only listing: ReceivablesView (CASHIER/ACCOUNTANT) resolves fiado
+    // invoice labels from GET /sales; the payload is tenant-scoped invoice
+    // data already visible to both profiles (customer name + amounts). POST is
+    // unchanged below — reading the list never grants sale creation.
+    await requireApiAuth(['CASHIER', 'ACCOUNTANT', 'STAFF', 'TENANT_ADMIN']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 
@@ -26,7 +30,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
+    await requireApiAuth(['CASHIER', 'STAFF', 'TENANT_ADMIN']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 

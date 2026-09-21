@@ -15,6 +15,7 @@ import {
     Contact,
     Undo2,
     HandCoins,
+    FileText,
 } from "lucide-react";
 import { DistributionDashboard } from "./DistributionDashboard";
 import { InventoryView } from "./InventoryView";
@@ -27,7 +28,9 @@ import { CustomersView } from "./CustomersView";
 import SuppliersView from "./SuppliersView";
 import EmployeesView from "./EmployeesView";
 import TaxAndInvoicingView from "./TaxAndInvoicingView";
+import { DailyCloseReportView } from "./DailyCloseReportView";
 import { getMe } from "@/features/auth/api";
+import { visibleTabs } from "../lib/roles";
 
 export type DistributionTab =
     | "dashboard"
@@ -40,24 +43,34 @@ export type DistributionTab =
     | "cash"
     | "suppliers"
     | "employees"
-    | "tax";
+    | "tax"
+    | "reportes";
 
 export default function DistributionModuleApp() {
     const [activeTab, setActiveTab] = useState<DistributionTab>("dashboard");
     const [tenantName, setTenantName] = useState<string | null>(null);
+    const [userRole, setUserRole] = useState<string | null>(null);
     const t = useTranslations("distributionModule");
 
     // The header reflects the real tenant name from the session, never a
-    // hardcoded demo label.
+    // hardcoded demo label; the session role drives tab-level UI gating
+    // (route guards remain the server-side source of truth).
     React.useEffect(() => {
         let active = true;
         getMe().then((me) => {
-            if (active) setTenantName(me?.tenant?.name ?? null);
+            if (!active) return;
+            setTenantName(me?.tenant?.name ?? null);
+            setUserRole(me?.user?.role ?? null);
         });
         return () => { active = false; };
     }, []);
 
-    const navItems: { id: DistributionTab; icon: React.ElementType }[] = [
+    // Unknown role (still loading) keeps the full tab set: legacy behavior for
+    // unrestricted profiles, no flicker for admins. Restricted profiles
+    // (CASHIER / ACCOUNTANT) see only their module set.
+    const allowedTabs = visibleTabs(userRole);
+
+    const tabs: Array<{ id: DistributionTab; icon: React.ElementType }> = [
         { id: "dashboard", icon: LayoutDashboard },
         { id: "inventory", icon: Package },
         { id: "sales", icon: ShoppingCart },
@@ -69,7 +82,16 @@ export default function DistributionModuleApp() {
         { id: "suppliers", icon: Truck },
         { id: "employees", icon: Users },
         { id: "tax", icon: Receipt },
+        { id: "reportes", icon: FileText },
     ];
+    const navItems = tabs.filter((item) => allowedTabs.includes(item.id));
+
+    // A restricted role may load while the user is already on a tab it hides
+    // (clicked before the session resolved): render dashboard instead of the
+    // forbidden view — the API would 403 anyway.
+    const safeTab: DistributionTab = allowedTabs.includes(activeTab)
+        ? activeTab
+        : "dashboard";
 
     return (
         <div className="flex h-full min-h-0 w-full flex-col bg-background text-foreground">
@@ -96,7 +118,7 @@ export default function DistributionModuleApp() {
                 <div className="hidden sm:flex items-center gap-1.5 bg-muted/50 p-1 rounded-lg border border-border overflow-x-auto">
                     {navItems.map((item) => {
                         const Icon = item.icon;
-                        const isActive = activeTab === item.id;
+                        const isActive = safeTab === item.id;
                         return (
                             <button
                                 key={item.id}
@@ -117,17 +139,18 @@ export default function DistributionModuleApp() {
             </header>
             {/* Main Content Area */}
             <main className="flex-1 overflow-y-auto px-6 pb-6">
-                {activeTab === "dashboard" && <DistributionDashboard />}
-                {activeTab === "inventory" && <InventoryView />}
-                {activeTab === "sales" && <SalesPOSView />}
-                {activeTab === "history" && <SalesHistoryView />}
-                {activeTab === "returns" && <SalesReturnsView />}
-                {activeTab === "customers" && <CustomersView />}
-                {activeTab === "receivables" && <ReceivablesView />}
-                {activeTab === "cash" && <CashRegisterView />}
-                {activeTab === "suppliers" && <SuppliersView />}
-                {activeTab === "employees" && <EmployeesView />}
-                {activeTab === "tax" && <TaxAndInvoicingView />}
+                {safeTab === "dashboard" && <DistributionDashboard />}
+                {safeTab === "inventory" && <InventoryView userRole={userRole} />}
+                {safeTab === "sales" && <SalesPOSView />}
+                {safeTab === "history" && <SalesHistoryView />}
+                {safeTab === "returns" && <SalesReturnsView />}
+                {safeTab === "customers" && <CustomersView />}
+                {safeTab === "receivables" && <ReceivablesView />}
+                {safeTab === "cash" && <CashRegisterView />}
+                {safeTab === "suppliers" && <SuppliersView userRole={userRole} />}
+                {safeTab === "employees" && <EmployeesView />}
+                {safeTab === "tax" && <TaxAndInvoicingView />}
+                {safeTab === "reportes" && <DailyCloseReportView />}
             </main>
         </div>
     );

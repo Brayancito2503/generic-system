@@ -75,6 +75,10 @@ export const createEmployeeSchema = z.object({
   phone: nullableText,
   branchId: nullableText,
   role: z.string().trim().min(1).max(80).default('Vendedor'),
+  // Access profile that drives route guards and UI gating; absent = legacy
+  // full access (the "Vendedor" free-text role above is the job title, not
+  // the permission profile).
+  accessRole: z.enum(['CASHIER', 'ACCOUNTANT', 'MANAGER']).optional(),
   department: nullableText,
   salary: nonNegativeNumber.nullish(),
   commissionRate: z.number().finite().min(0).max(100).nullish(),
@@ -174,6 +178,20 @@ export const registerSaleSchema = z.object({
 export const salesListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+/**
+ * Daily close report query: requires a strict `YYYY-MM-DD` that also exists on
+ * the calendar (2026-02-31 rolls over and fails the day-match refine).
+ */
+export const dailyCloseQuerySchema = z.object({
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha inválido')
+    .refine((v) => {
+      const d = new Date(`${v}T00:00:00Z`);
+      return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+    }, 'Fecha inválida'),
 });
 
 // ---------------------------------------------------------------------------

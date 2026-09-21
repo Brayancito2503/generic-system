@@ -11,6 +11,10 @@ export async function POST(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
+    // STAFF/TENANT_ADMIN only: the returns tab is hidden for CASHIER (no UI
+    // entry exists), so the mutation stays out of the POS surface. If
+    // cashier-initiated returns land on the product roadmap, ship the UI (a
+    // returns entry in the cashier POS) and reopen this permission TOGETHER.
     await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');

@@ -6,6 +6,7 @@ import { useTranslations } from 'next-intl';
 import { Package, Search, Plus, AlertTriangle, TrendingUp, TrendingDown, Edit2, X, Loader2, Trash2 } from 'lucide-react';
 import type { InventoryStockItem, PurchaseOrderEntity, CashSessionEntity } from '../entities';
 import { apiGet, apiSend } from '../api';
+import { isCashier } from '../lib/roles';
 
 const fmt = (n: number) => `C$ ${n.toLocaleString('es-NI', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -16,7 +17,7 @@ interface ProductFormData {
 
 const emptyForm: ProductFormData = { sku: '', name: '', description: '', cost: '', price: '', stock: '', minAlert: '5' };
 
-export function InventoryView() {
+export function InventoryView({ userRole }: { userRole?: string | null }) {
   const t = useTranslations('distributionModule');
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
@@ -28,6 +29,11 @@ export function InventoryView() {
   const [deleteTarget, setDeleteTarget] = useState<InventoryStockItem | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // CASHIER: catalog + create allowed; price/cost edits and deletes are
+  // server-guarded (PATCH/DELETE are STAFF/TENANT_ADMIN-only), so the buttons
+  // are hidden instead of failing with 403.
+  const canEditCatalog = !isCashier(userRole);
+
   const { data: items = [], isPending, isError } = useQuery<InventoryStockItem[]>({
     queryKey: ['inventory'],
     queryFn: () => apiGet<InventoryStockItem[]>(`/inventory`),
@@ -36,13 +42,20 @@ export function InventoryView() {
   // There is no branch selector endpoint: the tenant's branch is derived from
   // server data (existing purchase order or open cash session), same as in the
   // purchase orders view. Stock writes cannot happen without it (400 server-side).
+  // CASHIER cannot write stock (PATCH/DELETE are STAFF/TENANT_ADMIN-only) and
+  // has no access to these endpoints, so the fetches are skipped for the POS
+  // profile instead of producing 403 console noise; branchId stays '' and no
+  // column depends on it in this view.
+  const cashier = isCashier(userRole);
   const { data: orders = [] } = useQuery<PurchaseOrderEntity[]>({
     queryKey: ['purchase-orders'],
     queryFn: () => apiGet<PurchaseOrderEntity[]>(`/purchase-orders`),
+    enabled: !cashier,
   });
   const { data: cashSession } = useQuery<CashSessionEntity | null>({
     queryKey: ['cash-session'],
     queryFn: () => apiGet<CashSessionEntity | null>(`/cash`),
+    enabled: !cashier,
   });
   const branchId = orders.find((o) => o.branchId)?.branchId ?? cashSession?.branchId ?? '';
 
@@ -232,12 +245,16 @@ export function InventoryView() {
                       </td>
                       <td className="px-4 py-3 text-center">
                         <div className="flex items-center justify-center gap-1">
-                          <button type="button" onClick={() => handleEdit(item)} className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors" title={t('inventory.editTitle')}>
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button type="button" onClick={() => { setDeleteTarget(item); setDeleteError(null); }} className="p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors" title={t('inventory.delete')}>
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {canEditCatalog && (
+                            <>
+                              <button type="button" onClick={() => handleEdit(item)} className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors" title={t('inventory.editTitle')}>
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button type="button" onClick={() => { setDeleteTarget(item); setDeleteError(null); }} className="p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors" title={t('inventory.delete')}>
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>

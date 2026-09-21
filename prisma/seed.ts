@@ -27,10 +27,10 @@ const suppliers = [
 ];
 
 const employees = [
-  { firstName: 'Mario', lastName: 'Alvarado', email: 'mario.alvarado@distribuidora.com.ni', phone: '+505 8911-2233', role: 'Vendedor de Ruta', department: 'Ventas Exterior', salary: 14500, commissionRate: 2.5, hireDate: new Date('2024-03-15') },
-  { firstName: 'Elena', lastName: 'Torres', email: 'elena.torres@distribuidora.com.ni', phone: '+505 8822-3344', role: 'Jefe de Bodega', department: 'Inventario & Logística', salary: 16000, commissionRate: 0, hireDate: new Date('2023-01-10') },
-  { firstName: 'Kevin', lastName: 'Mejía', email: 'kevin.mejia@distribuidora.com.ni', phone: '+505 8833-5566', role: 'Cajero Principal', department: 'Caja & Facturación', salary: 13000, commissionRate: 0.5, hireDate: new Date('2025-06-01') },
-  { firstName: 'José', lastName: 'Castillo', email: 'jose.castillo@distribuidora.com.ni', phone: '+505 8900-1122', role: 'Conductor de Reparto', department: 'Logística', salary: 12500, commissionRate: 1.0, hireDate: new Date('2024-11-01'), isActive: false },
+  { firstName: 'Mario', lastName: 'Alvarado', email: 'mario.alvarado@distribuidora.com.ni', phone: '+505 8911-2233', role: 'Vendedor de Ruta', accessRole: 'CASHIER', department: 'Ventas Exterior', salary: 14500, commissionRate: 2.5, hireDate: new Date('2024-03-15') },
+  { firstName: 'Elena', lastName: 'Torres', email: 'elena.torres@distribuidora.com.ni', phone: '+505 8822-3344', role: 'Jefe de Bodega', accessRole: 'ACCOUNTANT', department: 'Inventario & Logística', salary: 16000, commissionRate: 0, hireDate: new Date('2023-01-10') },
+  { firstName: 'Kevin', lastName: 'Mejía', email: 'kevin.mejia@distribuidora.com.ni', phone: '+505 8833-5566', role: 'Cajero Principal', accessRole: 'CASHIER', department: 'Caja & Facturación', salary: 13000, commissionRate: 0.5, hireDate: new Date('2025-06-01') },
+  { firstName: 'José', lastName: 'Castillo', email: 'jose.castillo@distribuidora.com.ni', phone: '+505 8900-1122', role: 'Conductor de Reparto', accessRole: null, department: 'Logística', salary: 12500, commissionRate: 1.0, hireDate: new Date('2024-11-01'), isActive: false },
 ];
 
 const customers = [
@@ -219,6 +219,7 @@ async function main() {
         personId: person.id,
         branchId: branch.id,
         position: e.role,
+        accessRole: (e.accessRole as 'CASHIER' | 'ACCOUNTANT' | 'MANAGER' | null) ?? null,
         salary: e.salary,
         hireDate: e.hireDate,
         isActive: e.isActive !== false,
@@ -243,6 +244,10 @@ async function main() {
       tenantId: tenant.id,
       email: 'admin@distribuidora-sanjose.com',
       passwordHash: adminPassword,
+      // Elena's employee profile is ACCOUNTANT, but this admin demo account
+      // must stay TENANT_ADMIN or no demo login could manage employees/
+      // settings (the app UI derives session roles from the User account,
+      // which mirrors the access profile on profile changes).
       role: 'TENANT_ADMIN',
       personId: adminPerson?.id ?? null,
     },
@@ -254,7 +259,9 @@ async function main() {
       email: 'cajero@distribuidora-sanjose.com',
       passwordHash: staffPassword,
       posPinHash: posPin,
-      role: 'STAFF',
+      // Kevin (Cajero Principal) has accessRole CASHIER → the linked User gets
+      // the CASHIER session role so the PIN demo exercises the new profile.
+      role: 'CASHIER',
       personId: staffPerson?.id ?? null,
     },
   });
@@ -360,6 +367,7 @@ async function main() {
           itemId: itemRecords[idx].id,
           quantity: qty,
           price: itemRecords[idx].price,
+          cost: itemRecords[idx].cost,
         },
       });
     }

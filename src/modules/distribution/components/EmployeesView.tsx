@@ -19,6 +19,8 @@ interface EmployeeFormState {
   email: string;
   phone: string;
   role: string;
+  /** Access profile: 'CASHIER' | 'ACCOUNTANT' | 'MANAGER'; '' = legacy full access. */
+  accessRole: string;
   department: string;
   salary: string;
   commissionRate: string;
@@ -31,6 +33,7 @@ const emptyForm = (): EmployeeFormState => ({
   email: '',
   phone: '',
   role: 'Vendedor',
+  accessRole: '',
   department: 'Ventas',
   salary: '',
   commissionRate: '',
@@ -44,6 +47,7 @@ const toForm = (emp: EmployeeEntity): EmployeeFormState => ({
   email: emp.email ?? '',
   phone: emp.phone ?? '',
   role: emp.role,
+  accessRole: emp.accessRole ?? '',
   department: emp.department ?? '',
   salary: emp.salary != null ? String(emp.salary) : '',
   commissionRate: emp.commissionRate != null ? String(emp.commissionRate) : '',
@@ -78,6 +82,7 @@ export default function EmployeesView() {
       email?: string | null;
       phone?: string | null;
       role: string;
+      accessRole?: 'CASHIER' | 'ACCOUNTANT' | 'MANAGER';
       department?: string | null;
       salary?: number;
       commissionRate?: number;
@@ -100,6 +105,9 @@ export default function EmployeesView() {
         role: form.role.trim(),
         department: form.department.trim() || null,
       };
+      // accessRole only when the admin picked a profile: empty string means
+      // "keep as-is" (omitted keys follow PATCH semantics server-side).
+      if (form.accessRole) payload.accessRole = form.accessRole;
       const salary = parseFloat(form.salary);
       const commissionRate = parseFloat(form.commissionRate);
       if (!Number.isNaN(salary)) payload.salary = salary;
@@ -159,6 +167,9 @@ export default function EmployeesView() {
       email: newEmployee.email || null,
       phone: newEmployee.phone || null,
       role: newEmployee.role,
+      accessRole: newEmployee.accessRole
+        ? (newEmployee.accessRole as 'CASHIER' | 'ACCOUNTANT' | 'MANAGER')
+        : undefined,
       department: newEmployee.department,
       salary: parseFloat(newEmployee.salary) || 0,
       commissionRate: parseFloat(newEmployee.commissionRate) || 0,
@@ -286,6 +297,7 @@ export default function EmployeesView() {
                   <th className="px-5 py-3">{t('colName')}</th>
                   <th className="px-5 py-3">{t('colPosition')}</th>
                   <th className="px-5 py-3">{t('colDepartment')}</th>
+                  <th className="px-5 py-3">{t('colAccessRole')}</th>
                   <th className="px-5 py-3 text-right">{t('colSalary')}</th>
                   <th className="px-5 py-3 text-right">{t('colCommission')}</th>
                   <th className="px-5 py-3 text-center">{t('colStatus')}</th>
@@ -314,6 +326,17 @@ export default function EmployeesView() {
                     </td>
                     <td className="px-5 py-3.5 text-foreground font-medium">{emp.role || t('noRole')}</td>
                     <td className="px-5 py-3.5 text-muted-foreground">{emp.department || t('noDepartment')}</td>
+                    <td className="px-5 py-3.5">
+                      {emp.accessRole ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                          {t(`accessRole${emp.accessRole}`)}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-0.5 rounded-full bg-muted text-muted-foreground border border-border">
+                          {t('accessRoleNone')}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-5 py-3.5 text-right font-medium text-emerald-500">
                       {fmtLps(emp.salary || 0)}
                     </td>
@@ -453,6 +476,20 @@ export default function EmployeesView() {
                   />
                 </div>
               </div>
+              <div>
+                <label className="text-xs text-muted-foreground block mb-1">{t('accessRole')}</label>
+                <select
+                  value={newEmployee.accessRole}
+                  onChange={(e) => setNewEmployee({ ...newEmployee, accessRole: e.target.value })}
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="">{t('accessRoleNone')}</option>
+                  <option value="CASHIER">{t('accessRoleCashier')}</option>
+                  <option value="ACCOUNTANT">{t('accessRoleAccountant')}</option>
+                  <option value="MANAGER">{t('accessRoleManager')}</option>
+                </select>
+                <p className="text-xs text-muted-foreground mt-1.5">{t('accessRoleHint')}</p>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-muted-foreground block mb-1">{t('salary')}</label>
@@ -574,6 +611,20 @@ export default function EmployeesView() {
                     className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                 </div>
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground block mb-1">{t('accessRole')}</label>
+                <select
+                  value={editModal.accessRole}
+                  onChange={(e) => setEditModal({ ...editModal, accessRole: e.target.value })}
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="">{t('accessRoleNone')}</option>
+                  <option value="CASHIER">{t('accessRoleCashier')}</option>
+                  <option value="ACCOUNTANT">{t('accessRoleAccountant')}</option>
+                  <option value="MANAGER">{t('accessRoleManager')}</option>
+                </select>
+                <p className="text-xs text-muted-foreground mt-1.5">{t('accessRoleHint')}</p>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>

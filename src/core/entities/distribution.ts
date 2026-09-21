@@ -6,6 +6,13 @@ export type PaymentMethod = 'CASH' | 'CARD' | 'TRANSFER' | 'CREDIT';
 /** Lifecycle of a credit-sale receivable. */
 export type ReceivableStatus = 'OPEN' | 'PARTIAL' | 'PAID';
 
+/**
+ * Employee access profile: the vertical business role that determines which
+ * modules and in-view actions an employee can use. `null` on an employee
+ * means legacy full access (linked session role stays STAFF).
+ */
+export type AccessRole = 'CASHIER' | 'ACCOUNTANT' | 'MANAGER';
+
 export interface SupplierEntity {
   id: string;
   tenantId: string;
@@ -58,6 +65,8 @@ export interface EmployeeEntity {
   phone?: string | null;
   branchId?: string | null;
   role: string;
+  /** Access profile: CASHIER/ACCOUNTANT/MANAGER, or null = legacy full access. */
+  accessRole?: AccessRole | null;
   department?: string | null;
   salary?: number | null;
   commissionRate?: number | null;
@@ -268,4 +277,49 @@ export interface PaginatedResult<T> {
   page: number;
   limit: number;
   hasMore: boolean;
+}
+
+// ─── Daily Close Report (Cierre Diario) ───────────────────────────────────────
+
+/** One aggregated product line of a day's sales. */
+export interface DailyCloseLine {
+  itemName: string;
+  uom?: string | null; // from item.attributes.uom
+  quantity: number; // total units sold that day
+  costUnit: number; // lineCost / quantity (2dp)
+  priceUnit: number; // weighted avg sale price (2dp)
+  lineCost: number; // sum(cost*qty)
+  lineRevenue: number; // sum(price*qty)
+  margin: number; // lineRevenue - lineCost
+}
+
+/** Sales grouped by payment method for the day. */
+export interface DailyClosePaymentBreakdown {
+  method: string;
+  count: number;
+  total: number;
+}
+
+/** One receivable (credit) payment collected during the day. */
+export interface DailyCloseCollection {
+  customerName: string;
+  amount: number;
+  method: string;
+  createdAt: string;
+}
+
+/** Full daily close payload consumed by the reports view. */
+export interface DailyCloseReport {
+  date: string;
+  lines: DailyCloseLine[];
+  totals: {
+    cost: number;
+    revenue: number;
+    margin: number;
+    taxAmount: number;
+    discount: number;
+  };
+  paymentBreakdown: DailyClosePaymentBreakdown[];
+  collections: DailyCloseCollection[];
+  collectionsTotal: number;
 }

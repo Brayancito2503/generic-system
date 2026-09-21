@@ -2,9 +2,11 @@
 // Core layer: no infrastructure imports here.
 
 import type {
+  AccessRole,
   CashMovementEntity,
   CashSessionEntity,
   CustomerLight,
+  DailyCloseReport,
   DistributionDashboardStats,
   EmployeeEntity,
   FiscalSummary,
@@ -78,6 +80,8 @@ export interface CreateEmployeeInput {
   phone?: string | null;
   branchId?: string | null;
   role: string;
+  /** Access profile: CASHIER/ACCOUNTANT/MANAGER; undefined = legacy full access. */
+  accessRole?: AccessRole | null;
   department?: string | null;
   salary?: number | null;
   commissionRate?: number | null;
@@ -157,6 +161,8 @@ export interface UpdateEmployeeInput {
   phone?: string | null;
   branchId?: string | null;
   role?: string;
+  /** Access profile: CASHIER/ACCOUNTANT/MANAGER; undefined = untouched. */
+  accessRole?: AccessRole | null;
   department?: string | null;
   salary?: number | null;
   commissionRate?: number | null;
@@ -374,4 +380,10 @@ export interface IDistributionRepository {
     receivableId: string,
     input: PayReceivableInput
   ): Promise<ReceivableEntity>;
+  /**
+   * Daily close report for a calendar day (America/Managua, UTC-6): aggregated
+   * sales lines by item (cost snapshot × qty vs price × qty), sale totals,
+   * payment-method breakdown and credit collections received that day.
+   */
+  getDailyCloseReport(tenantId: string, date: string): Promise<DailyCloseReport>;
 }

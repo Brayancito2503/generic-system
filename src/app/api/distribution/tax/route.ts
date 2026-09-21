@@ -9,8 +9,11 @@ const repository = new PrismaDistributionRepository();
 
 export async function GET(request: NextRequest) {
   try {
-    // Rate reads are operational (POS computes invoice tax) → STAFF allowed.
-    await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
+    // Read (list) handler: the POS and the invoicing screens render tax rates
+    // while charging inclusive tax (SalesPOSView fetches GET /tax), so every
+    // distribution profile may list them. POST (create) below stays
+    // TENANT_ADMIN-only — the read set never grants mutation.
+    await requireApiAuth(['CASHIER', 'ACCOUNTANT', 'STAFF', 'TENANT_ADMIN']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 

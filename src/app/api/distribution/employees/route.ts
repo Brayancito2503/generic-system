@@ -9,7 +9,7 @@ const repository = new PrismaDistributionRepository();
 
 export async function GET(request: NextRequest) {
   try {
-    await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
+    await requireApiAuth(['TENANT_ADMIN']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 
@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
+    await requireApiAuth(['TENANT_ADMIN']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 
@@ -36,8 +36,9 @@ export async function POST(request: NextRequest) {
     if (!parsed.success) throw new ApiError(400, 'Datos inválidos');
 
     // Employee record first; when a PIN was provided, link the Person to a
-    // User (bcrypt-hashed, role STAFF) right after — the link runs in its own
-    // transaction, so a link failure leaves the employee created (retryable).
+    // User (bcrypt-hashed, role derived from accessRole) right after — the
+    // link runs in its own transaction, so a link failure leaves the
+    // employee created (retryable).
     const created = await repository.createEmployee(tenantId, {
       firstName: parsed.data.firstName,
       lastName: parsed.data.lastName,
@@ -45,6 +46,7 @@ export async function POST(request: NextRequest) {
       phone: parsed.data.phone ?? null,
       branchId: parsed.data.branchId ?? null,
       role: parsed.data.role,
+      accessRole: parsed.data.accessRole ?? null,
       department: parsed.data.department ?? null,
       salary: parsed.data.salary ?? null,
       commissionRate: parsed.data.commissionRate ?? null,
@@ -54,6 +56,7 @@ export async function POST(request: NextRequest) {
     if (parsed.data.pin !== undefined) {
       await repository.linkEmployeeUser(tenantId, created.id, {
         pin: parsed.data.pin,
+        accessRole: parsed.data.accessRole ?? null,
       });
     }
 

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import type { SupplierEntity, PurchaseOrderEntity, PurchaseOrderItemEntity, InventoryStockItem, CashSessionEntity } from '../entities';
 import { apiGet, apiSend } from '../api';
+import { isAccountant } from '../lib/roles';
 
 const fmtLps = (n: number) => `C$ ${n.toLocaleString('es-NI', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -27,13 +28,18 @@ const emptyNewSupplier = {
   address: '',
 };
 
-export default function SuppliersView() {
+export default function SuppliersView({ userRole }: { userRole?: string | null }) {
   const t = useTranslations('distributionModule');
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'suppliers' | 'orders'>('suppliers');
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddSupplierModal, setShowAddSupplierModal] = useState(false);
   const [newSupplier, setNewSupplier] = useState(emptyNewSupplier);
+
+  // ACCOUNTANT reads suppliers and purchase orders but never writes them:
+  // create/receive are STAFF/TENANT_ADMIN-only server-side, so the action
+  // buttons are hidden instead of failing with 403.
+  const readOnly = isAccountant(userRole);
 
   // PO create flow
   const [showCreateOrder, setShowCreateOrder] = useState(false);
@@ -295,13 +301,15 @@ export default function SuppliersView() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setShowAddSupplierModal(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-primary hover:opacity-90 font-medium text-sm text-primary-foreground rounded-lg transition-colors shadow-xs"
-          >
-            <Plus className="w-4 h-4" /> {t('suppliers.newSupplier')}
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => setShowAddSupplierModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-primary hover:opacity-90 font-medium text-sm text-primary-foreground rounded-lg transition-colors shadow-xs"
+            >
+              <Plus className="w-4 h-4" /> {t('suppliers.newSupplier')}
+            </button>
+          )}
         </div>
       </div>
 
@@ -419,13 +427,15 @@ export default function SuppliersView() {
           {activeTab === 'orders' && (
             <div className="space-y-4">
               <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateOrder(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-primary hover:opacity-90 font-medium text-sm text-primary-foreground rounded-lg transition-colors shadow-xs"
-                >
-                  <Plus className="w-4 h-4" /> {t('suppliers.createOrder')}
-                </button>
+                {!readOnly && (
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateOrder(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-primary hover:opacity-90 font-medium text-sm text-primary-foreground rounded-lg transition-colors shadow-xs"
+                  >
+                    <Plus className="w-4 h-4" /> {t('suppliers.createOrder')}
+                  </button>
+                )}
               </div>
 
               <div className="bg-card border border-border rounded-xl overflow-hidden shadow-xs">
@@ -460,7 +470,7 @@ export default function SuppliersView() {
                           </td>
                           <td className="px-5 py-3.5 text-center">{getStatusBadge(po.status)}</td>
                           <td className="px-5 py-3.5 text-right">
-                            {po.status === 'ORDERED' && (
+                            {!readOnly && po.status === 'ORDERED' && (
                               <button
                                 type="button"
                                 onClick={() => openReceive(po)}

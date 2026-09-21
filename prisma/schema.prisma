@@ -24,6 +24,17 @@ enum Role {
   TENANT_ADMIN
   STAFF
   CUSTOMER
+  CASHIER
+  ACCOUNTANT
+}
+
+// Employee access profile: the vertical's business role, mapped to a session
+// Role when the employee is linked to a User (POS PIN). `null` = legacy full
+// access (the linked User keeps role STAFF).
+enum AccessRole {
+  CASHIER
+  ACCOUNTANT
+  MANAGER
 }
 
 model Tenant {
@@ -188,6 +199,9 @@ model SaleItem {
   item     Item    @relation(fields: [itemId], references: [id])
   quantity Int
   price    Decimal @db.Decimal(10, 2)
+  // Cost snapshot at sale time: margins (daily close report) stay accurate
+  // even when the Item.cost is later updated.
+  cost     Decimal @db.Decimal(10, 2) @default(0)
 }
 
 // ==========================================
@@ -291,6 +305,7 @@ model Employee {
   branchId  String?
   branch    Branch?  @relation(fields: [branchId], references: [id])
   position  String   // Cargo: Vendedor, Almacenero, Contador, etc.
+  accessRole AccessRole? // Perfil de acceso: CASHIER/ACCOUNTANT/MANAGER (null = acceso completo legacy)
   salary    Decimal? @db.Decimal(10, 2)
   hireDate  DateTime
   isActive  Boolean  @default(true)

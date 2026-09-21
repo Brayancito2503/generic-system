@@ -43,10 +43,19 @@ export async function POST(request: NextRequest) {
       if (typeof body.pin !== 'string') {
         return NextResponse.json({ error: 'El PIN es requerido' }, { status: 400 });
       }
+      // POS mode mirrors the tenant-scoped pos-login semantics: only legacy
+      // STAFF and the POS-capable access profiles may authenticate by PIN
+      // (TENANT_ADMIN/SUPER_ADMIN never via a shared PIN — a MANAGER employee
+      // linked by linkEmployeeUser must use real credentials), the linked
+      // Employee must exist and be active, and deactivated tenants are skipped
+      // so their PINs cannot be probed.
       const users = await prisma.user.findMany({
-        where: { posPinHash: { not: null } },
+        where: {
+          posPinHash: { not: null },
+          role: { in: ['STAFF', 'CASHIER', 'ACCOUNTANT'] },
+        },
         include: {
-          person: true,
+          person: { include: { employee: true } },
           tenant: { select: { active: true } },
         },
       });
@@ -55,6 +64,11 @@ export async function POST(request: NextRequest) {
         // Skip PIN comparison for users of deactivated tenants: their PIN
         // must not be probeable and they must never match (no acceso).
         if (u.tenant?.active === false) continue;
+        // An employee link must exist and be active; a deactivated employee's
+        // PIN credential is revoked server-side (nulled) anyway, so this is
+        // defense in depth against stale/mislinked PIN rows.
+        const employee = u.person?.employee ?? null;
+        if (!employee || employee.isActive === false) continue;
         if (u.posPinHash && (await verifyPassword(body.pin, u.posPinHash))) {
           matched = u;
           break;

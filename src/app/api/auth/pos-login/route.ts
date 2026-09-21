@@ -8,7 +8,8 @@ import { SessionPayload, SESSION_COOKIE, sessionCookieOptions, signSession } fro
  *
  * Unlike POS mode in /api/auth/login (which brute-forces every user with a
  * posPinHash across all tenants), this route scopes the PIN check to the
- * tenant identified by its slug, and only admits STAFF users whose linked
+ * tenant identified by its slug, and only admits users whose session roles
+ * are POS-capable (STAFF legacy, CASHIER, ACCOUNTANT) and whose linked
  * Employee is active — a deactivated employee's PIN credential is revoked
  * server-side (nulled) on deactivation anyway, so this is defense in depth.
  */
@@ -34,13 +35,22 @@ export async function POST(request: NextRequest) {
     if (!tenant) {
       return NextResponse.json({ error: 'PIN incorrecto' }, { status: 401 });
     }
+    // Inactive (soft-deleted) tenants must not authenticate, mirroring the
+    // admin-mode gate in /api/auth/login. Same error shape as an invalid PIN
+    // so the tenant's state is never disclosed by the response.
+    if (tenant.active === false) {
+      return NextResponse.json({ error: 'PIN incorrecto' }, { status: 401 });
+    }
 
-    // Candidate STAFF users of the tenant with a PIN stored; bcrypt requires
-    // iterating candidates (never blind-compare against a bulk list).
+    // Candidate users of the tenant with a PIN stored; bcrypt requires
+    // iterating candidates (never blind-compare against a bulk list). Role
+    // filter: legacy STAFF plus the POS-capable profiles introduced by the
+    // access-role system (CASHIER/ACCOUNTANT). MANAGER users sign in with
+    // their real credentials (TENANT_ADMIN session role), never a shared PIN.
     const users = await prisma.user.findMany({
       where: {
         tenantId: tenant.id,
-        role: 'STAFF',
+        role: { in: ['STAFF', 'CASHIER', 'ACCOUNTANT'] },
         posPinHash: { not: null },
       },
       include: { person: { include: { employee: true } } },

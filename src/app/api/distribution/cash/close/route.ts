@@ -8,7 +8,7 @@ const repository = new PrismaDistributionRepository();
 
 export async function POST(request: NextRequest) {
   try {
-    await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
+    await requireApiAuth(['ACCOUNTANT', 'STAFF', 'TENANT_ADMIN']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 

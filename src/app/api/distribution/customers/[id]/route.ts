@@ -11,7 +11,7 @@ export async function PATCH(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
+    await requireApiAuth(['CASHIER', 'STAFF', 'TENANT_ADMIN']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 
