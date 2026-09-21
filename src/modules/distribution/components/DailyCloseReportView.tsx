@@ -16,14 +16,9 @@ import {
 } from 'lucide-react';
 import type { DailyCloseReport, PaymentMethod } from '../entities';
 import { apiGet } from '../api';
+import { formatCurrency } from '../utils/currency';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-const fmt = (n: number) =>
-  `C$ ${n.toLocaleString('es-NI', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
 
 const fmtDate = (date: string) =>
   new Date(`${date}T00:00:00`).toLocaleDateString('es-NI', {
@@ -47,6 +42,14 @@ const PAYMENT_LABEL_KEYS: Record<PaymentMethod, string> = {
 
 export function DailyCloseReportView() {
   const t = useTranslations('distributionModule');
+
+  const { data: tenantSettingsData } = useQuery<{ settings: { currencySymbol?: string } }>({
+    queryKey: ['tenant-settings'],
+    queryFn: () => apiGet<{ settings: { currencySymbol?: string } }>('/settings'),
+  });
+
+  const fmt = (n: number) => formatCurrency(n, tenantSettingsData?.settings);
+
   const [date, setDate] = useState(() => new Date().toLocaleDateString('en-CA'));
   const dateValid = DATE_RE.test(date);
 

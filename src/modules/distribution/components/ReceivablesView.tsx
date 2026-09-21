@@ -23,6 +23,7 @@ import type {
   SaleEntity,
 } from '../entities';
 import { apiGet, apiSend } from '../api';
+import { formatCurrency } from '../utils/currency';
 
 const PAGE_SIZE = 20;
 
@@ -30,12 +31,6 @@ const PAGE_SIZE = 20;
 type PayMethod = 'CASH' | 'CARD' | 'TRANSFER';
 
 const STATUS_FILTERS: ('' | ReceivableStatus)[] = ['', 'OPEN', 'PARTIAL', 'PAID'];
-
-const fmt = (n: number) =>
-  `C$ ${n.toLocaleString('es-NI', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
 
 const fmtDateTime = (iso: string | Date) =>
   new Date(iso).toLocaleString('es-NI', {
@@ -49,6 +44,13 @@ const fmtDateTime = (iso: string | Date) =>
 export function ReceivablesView() {
   const t = useTranslations('distributionModule');
   const queryClient = useQueryClient();
+
+  const { data: tenantSettingsData } = useQuery<{ settings: { currencySymbol?: string } }>({
+    queryKey: ['tenant-settings'],
+    queryFn: () => apiGet<{ settings: { currencySymbol?: string } }>('/settings'),
+  });
+
+  const fmt = (n: number) => formatCurrency(n, tenantSettingsData?.settings);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<'' | ReceivableStatus>('');

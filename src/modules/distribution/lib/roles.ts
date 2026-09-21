@@ -37,6 +37,7 @@ export const ALL_TABS = [
   'employees',
   'tax',
   'reportes',
+  'settings',
 ] as const;
 
 const RESTRICTED_TABS: Record<string, readonly string[]> = {

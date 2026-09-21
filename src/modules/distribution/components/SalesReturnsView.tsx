@@ -17,16 +17,11 @@ import {
 } from 'lucide-react';
 import type { PaginatedResult, SaleEntity, SaleReturnEntity } from '../entities';
 import { apiGet, apiSend } from '../api';
+import { formatCurrency } from '../utils/currency';
 
 const PAGE_SIZE = 20;
 /** Sales fetched for the "new return" picker (create is per-sale via POST /sales/[id]/returns). */
 const PICKER_LIMIT = 100;
-
-const fmt = (n: number) =>
-  `C$ ${n.toLocaleString('es-NI', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
 
 const fmtDate = (iso: string | Date) =>
   new Date(iso).toLocaleDateString('es-NI', {
@@ -38,6 +33,13 @@ const fmtDate = (iso: string | Date) =>
 export function SalesReturnsView() {
   const t = useTranslations('distributionModule');
   const queryClient = useQueryClient();
+
+  const { data: tenantSettingsData } = useQuery<{ settings: { currencySymbol?: string } }>({
+    queryKey: ['tenant-settings'],
+    queryFn: () => apiGet<{ settings: { currencySymbol?: string } }>('/settings'),
+  });
+
+  const fmt = (n: number) => formatCurrency(n, tenantSettingsData?.settings);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [expandedId, setExpandedId] = useState<string | null>(null);

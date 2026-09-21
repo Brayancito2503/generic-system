@@ -19,17 +19,20 @@ type TenantSettingsPayload = {
   logoUrl?: string;
   primaryColor?: string;
   currency?: string;
+  currencySymbol?: string;
+  secondaryCurrency?: string;
+  exchangeRate?: number;
   timezone?: string;
 };
 
 /**
- * Tenant settings administration (TENANT_ADMIN-only): reads and updates the
- * tenant identity (Tenant.name) plus the validated `Tenant.settings` JSONB.
+ * Tenant settings read (STAFF, ACCOUNTANT, TENANT_ADMIN) & admin write (TENANT_ADMIN):
+ * reads and updates the tenant identity (Tenant.name) plus the validated `Tenant.settings` JSONB.
  * The tenantId is always derived from the session — never from the client.
  */
 export async function GET(request: NextRequest) {
   try {
-    await requireApiAuth(['TENANT_ADMIN']);
+    await requireApiAuth(['ACCOUNTANT', 'STAFF', 'TENANT_ADMIN']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 

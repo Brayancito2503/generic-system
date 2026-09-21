@@ -131,7 +131,8 @@
             "suppliers": "Proveedores",
             "employees": "Empleados",
             "tax": "Impuestos",
-            "reportes": "Reportes"
+            "reportes": "Reportes",
+            "settings": "Ajustes"
         },
         "dashboard": {
             "title": "Dashboard General de Distribución",

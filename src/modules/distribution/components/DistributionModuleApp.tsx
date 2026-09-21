@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import {
     LayoutDashboard,
@@ -16,6 +17,7 @@ import {
     Undo2,
     HandCoins,
     FileText,
+    Settings,
 } from "lucide-react";
 import { DistributionDashboard } from "./DistributionDashboard";
 import { InventoryView } from "./InventoryView";
@@ -29,6 +31,7 @@ import SuppliersView from "./SuppliersView";
 import EmployeesView from "./EmployeesView";
 import TaxAndInvoicingView from "./TaxAndInvoicingView";
 import { DailyCloseReportView } from "./DailyCloseReportView";
+import TenantSettingsView from "./TenantSettingsView";
 import { getMe } from "@/features/auth/api";
 import { visibleTabs } from "../lib/roles";
 
@@ -44,26 +47,20 @@ export type DistributionTab =
     | "suppliers"
     | "employees"
     | "tax"
-    | "reportes";
+    | "reportes"
+    | "settings";
 
 export default function DistributionModuleApp() {
     const [activeTab, setActiveTab] = useState<DistributionTab>("dashboard");
-    const [tenantName, setTenantName] = useState<string | null>(null);
-    const [userRole, setUserRole] = useState<string | null>(null);
     const t = useTranslations("distributionModule");
 
-    // The header reflects the real tenant name from the session, never a
-    // hardcoded demo label; the session role drives tab-level UI gating
-    // (route guards remain the server-side source of truth).
-    React.useEffect(() => {
-        let active = true;
-        getMe().then((me) => {
-            if (!active) return;
-            setTenantName(me?.tenant?.name ?? null);
-            setUserRole(me?.user?.role ?? null);
-        });
-        return () => { active = false; };
-    }, []);
+    // Dynamic session query: header name and role gate reflect real-time query cache
+    const { data: me } = useQuery({
+        queryKey: ['me'],
+        queryFn: getMe,
+    });
+    const tenantName = me?.tenant?.name ?? null;
+    const userRole = me?.user?.role ?? null;
 
     // Unknown role (still loading) keeps the full tab set: legacy behavior for
     // unrestricted profiles, no flicker for admins. Restricted profiles
@@ -83,6 +80,7 @@ export default function DistributionModuleApp() {
         { id: "employees", icon: Users },
         { id: "tax", icon: Receipt },
         { id: "reportes", icon: FileText },
+        { id: "settings", icon: Settings },
     ];
     const navItems = tabs.filter((item) => allowedTabs.includes(item.id));
 
@@ -151,6 +149,7 @@ export default function DistributionModuleApp() {
                 {safeTab === "employees" && <EmployeesView />}
                 {safeTab === "tax" && <TaxAndInvoicingView />}
                 {safeTab === "reportes" && <DailyCloseReportView />}
+                {safeTab === "settings" && <TenantSettingsView />}
             </main>
         </div>
     );

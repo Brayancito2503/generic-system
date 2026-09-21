@@ -7,8 +7,7 @@ import { Package, Search, Plus, AlertTriangle, TrendingUp, TrendingDown, Edit2, 
 import type { InventoryStockItem, PurchaseOrderEntity, CashSessionEntity } from '../entities';
 import { apiGet, apiSend } from '../api';
 import { isCashier } from '../lib/roles';
-
-const fmt = (n: number) => `C$ ${n.toLocaleString('es-NI', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+import { formatCurrency } from '../utils/currency';
 
 interface ProductFormData {
   sku: string; name: string; description: string;
@@ -20,6 +19,13 @@ const emptyForm: ProductFormData = { sku: '', name: '', description: '', cost: '
 export function InventoryView({ userRole }: { userRole?: string | null }) {
   const t = useTranslations('distributionModule');
   const queryClient = useQueryClient();
+
+  const { data: tenantSettingsData } = useQuery<{ settings: { currencySymbol?: string } }>({
+    queryKey: ['tenant-settings'],
+    queryFn: () => apiGet<{ settings: { currencySymbol?: string } }>('/settings'),
+  });
+
+  const fmt = (n: number) => formatCurrency(n, tenantSettingsData?.settings);
   const [search, setSearch] = useState('');
   const [filterLowStock, setFilterLowStock] = useState(false);
   const [showForm, setShowForm] = useState(false);

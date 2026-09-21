@@ -10,6 +10,9 @@ interface TenantSettings {
   logoUrl?: string;
   primaryColor?: string;
   currency?: string;
+  currencySymbol?: string;
+  secondaryCurrency?: string;
+  exchangeRate?: number;
   timezone?: string;
 }
 
@@ -24,6 +27,9 @@ interface SettingsFormValues {
   logoUrl: string;
   primaryColor: string;
   currency: string;
+  currencySymbol: string;
+  secondaryCurrency: string;
+  exchangeRate: string;
   timezone: string;
 }
 
@@ -108,17 +114,52 @@ function SettingsForm({
         </div>
 
         <div>
-          <label className="text-xs text-muted-foreground block mb-1">{t('fieldCurrency')}</label>
+          <label className="text-xs text-muted-foreground block mb-1">Moneda Principal (ISO)</label>
           <input
             type="text"
             value={form.currency}
             onChange={(e) => update('currency', e.target.value)}
-            placeholder={t('currencyPlaceholder')}
+            placeholder="Ej. NIO, USD, EUR, HNL"
             className={inputClass}
           />
         </div>
 
         <div>
+          <label className="text-xs text-muted-foreground block mb-1">Símbolo de Moneda</label>
+          <input
+            type="text"
+            value={form.currencySymbol}
+            onChange={(e) => update('currencySymbol', e.target.value)}
+            placeholder="Ej. C$, $, €, L, Q"
+            className={inputClass}
+          />
+        </div>
+
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">Moneda Secundaria (Bi-Moneda)</label>
+          <input
+            type="text"
+            value={form.secondaryCurrency}
+            onChange={(e) => update('secondaryCurrency', e.target.value)}
+            placeholder="Ej. USD"
+            className={inputClass}
+          />
+        </div>
+
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">Tasa de Cambio (1 Moneda Sec. = X Principal)</label>
+          <input
+            type="number"
+            step="0.0001"
+            min="0"
+            value={form.exchangeRate}
+            onChange={(e) => update('exchangeRate', e.target.value)}
+            placeholder="Ej. 36.65"
+            className={inputClass}
+          />
+        </div>
+
+        <div className="md:col-span-2">
           <label className="text-xs text-muted-foreground block mb-1">{t('fieldTimezone')}</label>
           <input
             type="text"
@@ -171,7 +212,13 @@ export default function TenantSettingsView() {
       if (values.logoUrl.trim()) settings.logoUrl = values.logoUrl.trim();
       if (values.primaryColor.trim()) settings.primaryColor = values.primaryColor.trim();
       if (values.currency.trim()) settings.currency = values.currency.trim();
+      if (values.currencySymbol.trim()) settings.currencySymbol = values.currencySymbol.trim();
+      if (values.secondaryCurrency.trim()) settings.secondaryCurrency = values.secondaryCurrency.trim();
+      if (values.exchangeRate.trim() && !Number.isNaN(parseFloat(values.exchangeRate))) {
+        settings.exchangeRate = parseFloat(values.exchangeRate);
+      }
       if (values.timezone.trim()) settings.timezone = values.timezone.trim();
+
       return apiSend<TenantSettingsResponse>('/settings', 'PUT', {
         name: values.name.trim(),
         settings,
@@ -182,6 +229,7 @@ export default function TenantSettingsView() {
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
       queryClient.invalidateQueries({ queryKey: ['tenant-settings'] });
+      queryClient.invalidateQueries({ queryKey: ['me'] });
     },
     onError: (e) => setError(e instanceof Error ? e.message : t('saveError')),
   });
@@ -218,6 +266,9 @@ export default function TenantSettingsView() {
     logoUrl: server.settings.logoUrl ?? '',
     primaryColor: server.settings.primaryColor ?? '',
     currency: server.settings.currency ?? '',
+    currencySymbol: server.settings.currencySymbol ?? '',
+    secondaryCurrency: server.settings.secondaryCurrency ?? '',
+    exchangeRate: server.settings.exchangeRate ? String(server.settings.exchangeRate) : '',
     timezone: server.settings.timezone ?? '',
   };
 

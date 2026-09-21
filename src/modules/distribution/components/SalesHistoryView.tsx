@@ -18,14 +18,9 @@ import {
 } from 'lucide-react';
 import type { SaleEntity, PaginatedResult, PaymentMethod } from '../entities';
 import { apiGet } from '../api';
+import { formatCurrency } from '../utils/currency';
 
 const PAGE_SIZE = 20;
-
-const fmt = (n: number) =>
-  `C$ ${n.toLocaleString('es-NI', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
 
 const fmtDateTime = (iso: string | Date) =>
   new Date(iso).toLocaleString('es-NI', {
@@ -38,6 +33,13 @@ const fmtDateTime = (iso: string | Date) =>
 
 export function SalesHistoryView() {
   const t = useTranslations('distributionModule');
+
+  const { data: tenantSettingsData } = useQuery<{ settings: { currencySymbol?: string } }>({
+    queryKey: ['tenant-settings'],
+    queryFn: () => apiGet<{ settings: { currencySymbol?: string } }>('/settings'),
+  });
+
+  const fmt = (n: number) => formatCurrency(n, tenantSettingsData?.settings);
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [page, setPage] = useState(1);

@@ -19,12 +19,7 @@ import {
 } from "lucide-react";
 import type { DistributionDashboardStats } from "../entities";
 import { apiGet } from "../api";
-
-const fmt = (n: number) =>
-    new Intl.NumberFormat("es-NI", {
-        style: "currency",
-        currency: "NIO",
-    }).format(n);
+import { formatCurrency } from "../utils/currency";
 
 /** Renders a real percentage point: leading + for gains, one decimal, 0.0% when flat. */
 const formatTrend = (pct: number) => `${pct > 0 ? "+" : ""}${pct.toFixed(1)}%`;
@@ -122,6 +117,13 @@ function MiniBarChart({ data }: { data: { date: string; total: number }[] }) {
 
 export function DistributionDashboard() {
     const t = useTranslations("distributionModule");
+
+    const { data: tenantSettingsData } = useQuery<{ settings: { currencySymbol?: string } }>({
+        queryKey: ['tenant-settings'],
+        queryFn: () => apiGet<{ settings: { currencySymbol?: string } }>('/settings'),
+    });
+
+    const fmt = (n: number) => formatCurrency(n, tenantSettingsData?.settings);
 
     const { data: stats, isPending, isError } = useQuery<DistributionDashboardStats>({
         queryKey: ["distribution-dashboard"],

@@ -130,8 +130,9 @@
             "cash": "Cash Register",
             "suppliers": "Suppliers",
             "employees": "Employees",
-            "tax": "Taxation",
-            "reportes": "Reports"
+            "tax": "Taxes",
+            "reportes": "Reports",
+            "settings": "Settings"
         },
         "dashboard": {
             "title": "General Distribution Dashboard",

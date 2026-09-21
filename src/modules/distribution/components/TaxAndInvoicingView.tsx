@@ -19,12 +19,7 @@ import {
 } from 'lucide-react';
 import type { TaxRateEntity, FiscalSummary, InvoicingConfigEntity } from '../entities';
 import { apiGet, apiSend } from '../api';
-
-const fmt = (n: number) =>
-  `C$ ${n.toLocaleString('es-NI', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
+import { formatCurrency } from '../utils/currency';
 
 interface TaxModalState {
   id?: string;
@@ -203,6 +198,13 @@ export default function TaxAndInvoicingView() {
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<TaxModalState | null>(null);
+
+  const { data: tenantSettingsData } = useQuery<{ settings: { currencySymbol?: string } }>({
+    queryKey: ['tenant-settings'],
+    queryFn: () => apiGet<{ settings: { currencySymbol?: string } }>('/settings'),
+  });
+
+  const fmt = (n: number) => formatCurrency(n, tenantSettingsData?.settings);
 
   const { data: taxes = [], isPending } = useQuery<TaxRateEntity[]>({
     queryKey: ['tax-rates'],

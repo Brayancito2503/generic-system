@@ -26,6 +26,9 @@ export const tenantSettingsSchema = z
       .regex(/^#[0-9a-fA-F]{3,8}$/, 'Color inválido')
       .optional(),
     currency: z.string().trim().min(1).max(10).optional(),
+    currencySymbol: z.string().trim().min(1).max(10).optional(),
+    secondaryCurrency: z.string().trim().min(1).max(10).optional(),
+    exchangeRate: z.coerce.number().positive().optional(),
     timezone: z.string().trim().min(1).max(60).optional(),
   })
   .passthrough();
