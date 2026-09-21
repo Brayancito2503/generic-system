@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import {
@@ -14,11 +14,14 @@ import {
   Banknote,
   CheckCircle2,
   User,
+  UserPlus,
+  X,
+  Keyboard,
+  Barcode,
 } from 'lucide-react';
 import type { InventoryStockItem, CustomerLight, SaleEntity, TaxRateEntity, PaymentMethod } from '../entities';
 import { apiGet, apiSend } from '../api';
-
-const fmt = (n: number) => `C$ ${n.toLocaleString('es-NI', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+import { formatCurrency, formatSecondaryCurrency } from '../utils/currency';
 
 interface CartLine {
   itemId: string;
@@ -32,6 +35,15 @@ interface CartLine {
 export function SalesPOSView() {
   const t = useTranslations('distributionModule');
   const queryClient = useQueryClient();
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const { data: tenantSettingsData } = useQuery<{ settings: { currencySymbol?: string; secondaryCurrency?: string; exchangeRate?: number } }>({
+    queryKey: ['tenant-settings'],
+    queryFn: () => apiGet<{ settings: { currencySymbol?: string; secondaryCurrency?: string; exchangeRate?: number } }>('/settings'),
+  });
+
+  const fmt = (n: number) => formatCurrency(n, tenantSettingsData?.settings);
+
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState<CartLine[]>([]);
   const [discountInput, setDiscountInput] = useState('');
@@ -41,6 +53,15 @@ export function SalesPOSView() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
   const [paidInput, setPaidInput] = useState('');
   const [success, setSuccess] = useState<SaleEntity | null>(null);
+
+  // Express customer modal state
+  const [showExpressCustomerModal, setShowExpressCustomerModal] = useState(false);
+  const [newCustFirstName, setNewCustFirstName] = useState('');
+  const [newCustLastName, setNewCustLastName] = useState('');
+  const [newCustPhone, setNewCustPhone] = useState('');
+  const [newCustDocId, setNewCustDocId] = useState('');
+  const [createCustPending, setCreateCustPending] = useState(false);
+  const [createCustError, setCreateCustError] = useState<string | null>(null);
 
   const { data: items = [], isPending } = useQuery<InventoryStockItem[]>({
     queryKey: ['inventory'],
@@ -129,9 +150,6 @@ export function SalesPOSView() {
     CREDIT: 'sales.credit',
   };
 
-  // Tender: only the received amount is client input; the server derives the
-  // balance (total − paidAmount) and opens the receivable inside the sale
-  // transaction. Change is a display readout of those server values.
   const resolvedPaid =
     paymentMethod === 'CREDIT'
       ? 0
@@ -156,9 +174,78 @@ export function SalesPOSView() {
     });
   };
 
+  // Keyboard Shortcuts (F2: Checkout, F4: Focus Search, Esc: Clear Search / Close Modals)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F2') {
+        e.preventDefault();
+        if (canCheckout) {
+          handleCheckout();
+        }
+      } else if (e.key === 'F4') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      } else if (e.key === 'Escape') {
+        if (showExpressCustomerModal) {
+          setShowExpressCustomerModal(false);
+        } else if (search) {
+          setSearch('');
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canCheckout, showExpressCustomerModal, search, cart, customerId, paymentMethod, paidInput, discount, notes]);
+
+  // Barcode scanner handler: on Enter in search box, if SKU matches exact item, auto-add to cart
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && search.trim()) {
+      const trimmed = search.trim().toLowerCase();
+      const match = items.find(
+        (i) =>
+          (i.sku && i.sku.toLowerCase() === trimmed) ||
+          i.id.toLowerCase() === trimmed
+      );
+      if (match && match.stock > 0) {
+        addToCart(match);
+        setSearch('');
+        e.preventDefault();
+      }
+    }
+  };
+
+  // Create Express Customer handler
+  const handleCreateExpressCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCustFirstName.trim() || !newCustLastName.trim()) return;
+    setCreateCustPending(true);
+    setCreateCustError(null);
+    try {
+      const newCust = await apiSend<CustomerLight>('/customers', 'POST', {
+        firstName: newCustFirstName.trim(),
+        lastName: newCustLastName.trim(),
+        phone: newCustPhone.trim() || null,
+        documentId: newCustDocId.trim() || null,
+      });
+      setCustomerId(newCust.id);
+      setCustomerQuery(`${newCust.firstName} ${newCust.lastName}`);
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+      setShowExpressCustomerModal(false);
+      setNewCustFirstName('');
+      setNewCustLastName('');
+      setNewCustPhone('');
+      setNewCustDocId('');
+    } catch (err) {
+      setCreateCustError(err instanceof Error ? err.message : 'Error al crear cliente');
+    } finally {
+      setCreateCustPending(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* Header con Teclas Rápidas */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-foreground tracking-tight flex items-center gap-2">
@@ -167,6 +254,14 @@ export function SalesPOSView() {
           <p className="text-sm text-muted-foreground">
             {t('sales.subtitle')}
           </p>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground bg-card border border-border px-3 py-1.5 rounded-lg shadow-2xs">
+          <Keyboard className="w-4 h-4 text-primary shrink-0" />
+          <span><kbd className="px-1.5 py-0.5 bg-muted rounded font-mono text-[10px] font-semibold text-foreground">F4</kbd> Buscar</span>
+          <span className="text-border">•</span>
+          <span><kbd className="px-1.5 py-0.5 bg-muted rounded font-mono text-[10px] font-semibold text-foreground">F2</kbd> Facturar</span>
+          <span className="text-border">•</span>
+          <span><kbd className="px-1.5 py-0.5 bg-muted rounded font-mono text-[10px] font-semibold text-foreground">Esc</kbd> Limpiar</span>
         </div>
       </div>
 
@@ -204,11 +299,14 @@ export function SalesPOSView() {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <input
+              ref={searchInputRef}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder={t('sales.searchProduct')}
-              className="w-full bg-card border border-border rounded-lg pl-10 pr-4 py-2.5 text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+              onKeyDown={handleSearchKeyDown}
+              placeholder={`${t('sales.searchProduct')} (escanee código de barras o use F4)`}
+              className="w-full bg-card border border-border rounded-lg pl-10 pr-10 py-2.5 text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
             />
+            <Barcode className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/60" />
           </div>
 
           {isPending ? (
@@ -286,11 +384,20 @@ export function SalesPOSView() {
             </div>
           )}
 
-          {/* Cliente opcional */}
+          {/* Cliente opcional con Modal "Cliente Express" */}
           <div className="space-y-1.5">
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <User className="w-3.5 h-3.5" /> {t('sales.customerSelect')}
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <User className="w-3.5 h-3.5" /> {t('sales.customerSelect')}
+              </label>
+              <button
+                type="button"
+                onClick={() => setShowExpressCustomerModal(true)}
+                className="text-xs text-primary hover:underline flex items-center gap-1 font-medium"
+              >
+                <UserPlus className="w-3 h-3" /> + Cliente Express
+              </button>
+            </div>
             <input
               value={customerQuery}
               onChange={(e) => { setCustomerQuery(e.target.value); setCustomerId(''); }}
@@ -404,7 +511,22 @@ export function SalesPOSView() {
             )}
             <div className="flex justify-between text-foreground font-bold text-lg pt-1">
               <span>{t('sales.total')}</span>
-              <span>{fmt(total)}</span>
+              <div className="text-right">
+                <span>{fmt(total)}</span>
+                {formatSecondaryCurrency(
+                  total,
+                  tenantSettingsData?.settings?.exchangeRate,
+                  tenantSettingsData?.settings?.secondaryCurrency
+                ) && (
+                  <span className="block text-xs font-normal text-muted-foreground font-mono">
+                    ≈ {formatSecondaryCurrency(
+                      total,
+                      tenantSettingsData?.settings?.exchangeRate,
+                      tenantSettingsData?.settings?.secondaryCurrency
+                    )}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 
@@ -417,7 +539,7 @@ export function SalesPOSView() {
             {registerSale.isPending ? (
               <><Loader2 className="w-4 h-4 animate-spin" /> {t('sales.processing')}</>
             ) : (
-              <><Banknote className="w-4 h-4" /> {t('sales.processSale')}</>
+              <><Banknote className="w-4 h-4" /> {t('sales.processSale')} <kbd className="hidden sm:inline-block px-1.5 py-0.5 bg-emerald-700 rounded text-[10px] font-mono">F2</kbd></>
             )}
           </button>
           {needsCustomer && (
@@ -427,6 +549,93 @@ export function SalesPOSView() {
           )}
         </div>
       </div>
+
+      {/* Modal: Crear Cliente Express */}
+      {showExpressCustomerModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="bg-card border border-border rounded-xl p-6 w-full max-w-md space-y-4 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
+                <UserPlus className="w-5 h-5 text-primary" /> Crear Cliente Express
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowExpressCustomerModal(false)}
+                className="text-muted-foreground hover:text-foreground p-1 rounded-md"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {createCustError && (
+              <div className="p-3 bg-destructive/10 border border-destructive/30 rounded-lg text-xs text-destructive">
+                {createCustError}
+              </div>
+            )}
+
+            <form onSubmit={handleCreateExpressCustomer} className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-foreground mb-1">Nombre *</label>
+                  <input
+                    required
+                    value={newCustFirstName}
+                    onChange={(e) => setNewCustFirstName(e.target.value)}
+                    placeholder="Ej. Juan"
+                    className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-primary"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-foreground mb-1">Apellido *</label>
+                  <input
+                    required
+                    value={newCustLastName}
+                    onChange={(e) => setNewCustLastName(e.target.value)}
+                    placeholder="Ej. Pérez"
+                    className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-primary"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-1">Teléfono (opcional)</label>
+                <input
+                  value={newCustPhone}
+                  onChange={(e) => setNewCustPhone(e.target.value)}
+                  placeholder="Ej. +505 8888-8888"
+                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-primary"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-foreground mb-1">Cédula / Identificación (opcional)</label>
+                <input
+                  value={newCustDocId}
+                  onChange={(e) => setNewCustDocId(e.target.value)}
+                  placeholder="Ej. 001-010190-0000A"
+                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-primary"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowExpressCustomerModal(false)}
+                  className="px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded-lg transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={createCustPending}
+                  className="px-4 py-2 text-sm font-semibold bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg transition-colors flex items-center gap-1.5"
+                >
+                  {createCustPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
+                  Guardar y Seleccionar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
-}
+}

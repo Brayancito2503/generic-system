@@ -3,16 +3,39 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { Banknote, Plus, ArrowUpCircle, ArrowDownCircle, Lock, CheckCircle2, X, Clock, Loader2, AlertCircle } from 'lucide-react';
+import {
+  Banknote,
+  Plus,
+  ArrowUpCircle,
+  ArrowDownCircle,
+  Lock,
+  CheckCircle2,
+  X,
+  Clock,
+  Loader2,
+  AlertCircle,
+  Calculator,
+  AlertTriangle,
+  FileText,
+} from 'lucide-react';
 import type { CashSessionEntity, CashMovementEntity } from '../entities';
 import { apiGet, apiSend } from '../api';
+import { formatCurrency } from '../utils/currency';
 
-const fmt = (n: number) => `C$ ${n.toLocaleString('es-NI', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtTime = (v?: Date | string | null) => (v ? new Date(v).toLocaleTimeString() : '');
+
+const BILL_DENOMINATIONS = [1000, 500, 200, 100, 50, 20, 10, 5, 1];
 
 export function CashRegisterView() {
   const t = useTranslations('distributionModule');
   const queryClient = useQueryClient();
+
+  const { data: tenantSettingsData } = useQuery<{ settings: { currencySymbol?: string } }>({
+    queryKey: ['tenant-settings'],
+    queryFn: () => apiGet<{ settings: { currencySymbol?: string } }>('/settings'),
+  });
+
+  const fmt = (n: number) => formatCurrency(n, tenantSettingsData?.settings);
   const [showOpenForm, setShowOpenForm] = useState(false);
   const [showMovForm, setShowMovForm] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
@@ -23,6 +46,21 @@ export function CashRegisterView() {
   const [physicalCount, setPhysicalCount] = useState('');
   const [cashError, setCashError] = useState<string | null>(null);
   const [closed, setClosed] = useState<CashSessionEntity | null>(null);
+
+  // Denominations calculator state & justification note
+  const [showCalculator, setShowCalculator] = useState(false);
+  const [denominations, setDenominations] = useState<Record<number, number>>({
+    1000: 0,
+    500: 0,
+    200: 0,
+    100: 0,
+    50: 0,
+    20: 0,
+    10: 0,
+    5: 0,
+    1: 0,
+  });
+  const [closeJustification, setCloseJustification] = useState('');
 
   const { data: session, isPending } = useQuery<CashSessionEntity | null>({
     queryKey: ['cash-session'],
@@ -86,13 +124,24 @@ export function CashRegisterView() {
     setShowMovForm(false); setMovAmount(''); setMovConcept('');
   };
 
+  const updateDenomination = (denom: number, qty: number) => {
+    const validQty = Math.max(0, qty || 0);
+    const updated = { ...denominations, [denom]: validQty };
+    setDenominations(updated);
+    const totalSum = Object.entries(updated).reduce((acc, [d, q]) => acc + Number(d) * q, 0);
+    setPhysicalCount(totalSum > 0 ? totalSum.toFixed(2) : '');
+  };
+
   const handleClose = () => {
     if (!session || !physicalCount) return;
     const count = parseFloat(physicalCount);
     if (Number.isNaN(count) || count < 0) return;
     closeMutation.mutate({ sessionId: session.id, physicalCount: count });
-    setShowCloseConfirm(false); setPhysicalCount('');
+    setShowCloseConfirm(false); setPhysicalCount(''); setCloseJustification(''); setShowCalculator(false);
   };
+
+  const currentDiff = physicalCount ? parseFloat(physicalCount) - totalInRegister : 0;
+  const hasDiscrepancy = Math.abs(currentDiff) > 0.01;
 
   if (isPending) {
     return (
@@ -281,20 +330,103 @@ export function CashRegisterView() {
         </div>
       )}
 
-      {/* Modal: Confirmar Cierre */}
+      {/* Modal: Confirmar Cierre con Matriz de Billetes y Justificación */}
       {showCloseConfirm && session && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
-          <div className="bg-card border border-destructive/30 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-            <Lock className="w-10 h-10 text-destructive mx-auto mb-4" />
-            <h2 className="text-lg font-bold text-foreground text-center mb-1">{t('cash.closeConfirmTitle')}</h2>
-            <p className="text-sm text-muted-foreground text-center mb-4">{t('cash.closeConfirmExpected', { amount: fmt(totalInRegister) })}</p>
-            <label className="block text-xs text-muted-foreground mb-1">{t('cash.physicalCount')} (C$)</label>
-            <input value={physicalCount} onChange={e => setPhysicalCount(e.target.value)} placeholder="0.00" type="number" min="0" step="0.01"
-              className="w-full bg-background border border-border rounded-lg px-3 py-3 text-foreground text-lg font-bold text-center focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary mb-2" />
-            <p className="text-xs text-muted-foreground text-center mb-5">{t('cash.physicalCountHelp')}</p>
-            <div className="flex gap-3">
-              <button type="button" onClick={() => { setShowCloseConfirm(false); setPhysicalCount(''); }} className="flex-1 py-2.5 rounded-lg border border-border text-muted-foreground text-sm">{t('cash.cancel')}</button>
-              <button type="button" onClick={handleClose} disabled={closeMutation.isPending || !physicalCount} className="flex-1 py-2.5 rounded-lg bg-destructive text-white font-medium text-sm disabled:opacity-60 shadow-xs">{t('cash.confirmClose')}</button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto animate-in fade-in duration-150">
+          <div className="bg-card border border-destructive/30 rounded-2xl p-6 w-full max-w-lg shadow-2xl space-y-4 my-8">
+            <div className="text-center">
+              <Lock className="w-10 h-10 text-destructive mx-auto mb-2" />
+              <h2 className="text-lg font-bold text-foreground">{t('cash.closeConfirmTitle')}</h2>
+              <p className="text-sm text-muted-foreground">{t('cash.closeConfirmExpected', { amount: fmt(totalInRegister) })}</p>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-semibold text-foreground">{t('cash.physicalCount')} (C$)</label>
+                <button
+                  type="button"
+                  onClick={() => setShowCalculator(!showCalculator)}
+                  className="text-xs text-primary hover:underline flex items-center gap-1 font-medium"
+                >
+                  <Calculator className="w-3.5 h-3.5" />
+                  {showCalculator ? 'Ocultar Desglose' : 'Desglose por Billetes/Monedas'}
+                </button>
+              </div>
+              <input
+                value={physicalCount}
+                onChange={e => setPhysicalCount(e.target.value)}
+                placeholder="0.00"
+                type="number"
+                min="0"
+                step="0.01"
+                className="w-full bg-background border border-border rounded-lg px-3 py-3 text-foreground text-lg font-bold text-center focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+              />
+              <p className="text-xs text-muted-foreground text-center mt-1">{t('cash.physicalCountHelp')}</p>
+            </div>
+
+            {/* Matriz interactiva de denominaciones */}
+            {showCalculator && (
+              <div className="bg-muted/40 border border-border rounded-xl p-3.5 space-y-2 animate-in fade-in duration-150">
+                <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                  <Calculator className="w-3.5 h-3.5 text-primary" /> Conteo de Denominaciones
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  {BILL_DENOMINATIONS.map((denom) => (
+                    <div key={denom} className="bg-card border border-border rounded-lg p-2 text-center">
+                      <span className="text-xs font-bold text-foreground block">C$ {denom}</span>
+                      <input
+                        type="number"
+                        min="0"
+                        value={denominations[denom] || ''}
+                        onChange={(e) => updateDenomination(denom, parseInt(e.target.value) || 0)}
+                        placeholder="0"
+                        className="w-full text-center bg-background border border-border rounded px-1 py-1 text-xs font-mono font-medium text-foreground mt-1 focus:outline-none focus:border-primary"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Alerta de Diferencia y Campo de Justificación */}
+            {hasDiscrepancy && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3.5 space-y-2 text-xs">
+                <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 font-semibold">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>
+                    Diferencia detectada: {currentDiff < 0 ? `Faltante de ${fmt(Math.abs(currentDiff))}` : `Sobrante de ${fmt(currentDiff)}`}
+                  </span>
+                </div>
+                <div>
+                  <label className="block text-[11px] text-muted-foreground mb-1 flex items-center gap-1">
+                    <FileText className="w-3 h-3" /> Justificación / Observación del Arqueo
+                  </label>
+                  <input
+                    value={closeJustification}
+                    onChange={(e) => setCloseJustification(e.target.value)}
+                    placeholder="Ej. Billetes deteriorados o descuadre menor verificado"
+                    className="w-full bg-card border border-amber-500/30 rounded-lg px-2.5 py-1.5 text-xs text-foreground focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => { setShowCloseConfirm(false); setPhysicalCount(''); setCloseJustification(''); setShowCalculator(false); }}
+                className="flex-1 py-2.5 rounded-lg border border-border text-muted-foreground text-sm font-medium hover:bg-muted"
+              >
+                {t('cash.cancel')}
+              </button>
+              <button
+                type="button"
+                onClick={handleClose}
+                disabled={closeMutation.isPending || !physicalCount}
+                className="flex-1 py-2.5 rounded-lg bg-destructive text-white font-semibold text-sm disabled:opacity-60 shadow-xs hover:bg-destructive/90 transition-colors"
+              >
+                {closeMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : t('cash.confirmClose')}
+              </button>
             </div>
           </div>
         </div>
