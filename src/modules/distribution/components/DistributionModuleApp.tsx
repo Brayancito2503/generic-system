@@ -56,7 +56,7 @@ export default function DistributionModuleApp() {
 
     // Dynamic session query: header name and role gate reflect real-time query cache
     const { data: me } = useQuery({
-        queryKey: ['me'],
+        queryKey: ["me"],
         queryFn: getMe,
     });
     const tenantName = me?.tenant?.name ?? null;
@@ -94,26 +94,32 @@ export default function DistributionModuleApp() {
     return (
         <div className="flex h-full min-h-0 w-full flex-col bg-background text-foreground">
             {/* Top Banner / Header for Distribution Vertical */}
-            <header className="bg-card border-b border-border px-6 py-3 flex items-center justify-between mb-3 shadow-xs">
-                <div className="flex items-center gap-3">
-                    <div className="p-2 bg-primary/10 border border-primary/20 rounded-lg text-primary">
-                        <Store className="w-5 h-5" />
+            <header className="bg-card border-b border-border shadow-xs mb-3">
+                {/* Identity row: tenant + module badge + description */}
+                <div className="flex items-center gap-3 px-6 pt-4 pb-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 border border-primary/20 text-primary">
+                        <Store className="h-5 w-5" />
                     </div>
-                    <div>
-                        <h2 className="text-sm font-bold flex items-center gap-2 text-foreground">
-                            {tenantName || t("header.title")}
+                    <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <h2 className="truncate text-base font-bold text-foreground">
+                                {tenantName || t("header.title")}
+                            </h2>
                             <span className="px-2 py-0.5 text-[10px] uppercase font-bold tracking-wider rounded bg-primary/10 text-primary border border-primary/20">
                                 {t("header.moduleBadge")}
                             </span>
-                        </h2>
-                        <p className="text-xs text-muted-foreground">
+                        </div>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
                             {t("header.moduleDescription")}
                         </p>
                     </div>
                 </div>
 
-                {/* Quick Nav Badges */}
-                <div className="hidden sm:flex items-center gap-1.5 bg-muted/50 p-1 rounded-lg border border-border overflow-x-auto">
+                {/* Module navigation: roomier buttons, scrolls only when needed */}
+                <nav
+                    className="flex items-center gap-2 overflow-x-auto px-6 pb-4"
+                    aria-label={t("header.moduleBadge")}
+                >
                     {navItems.map((item) => {
                         const Icon = item.icon;
                         const isActive = safeTab === item.id;
@@ -121,31 +127,36 @@ export default function DistributionModuleApp() {
                             <button
                                 key={item.id}
                                 type="button"
+                                aria-current={isActive ? "page" : undefined}
                                 onClick={() => setActiveTab(item.id)}
-                                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                                className={`flex shrink-0 items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors ${
                                     isActive
-                                        ? "bg-primary text-primary-foreground shadow-xs font-semibold"
-                                        : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                                        ? "bg-primary/10 text-primary"
+                                        : "text-muted-foreground hover:bg-accent hover:text-foreground"
                                 }`}
                             >
-                                <Icon className="w-3.5 h-3.5" />
+                                <Icon className="h-4 w-4" />
                                 {t(`tabs.${item.id}`)}
                             </button>
                         );
                     })}
-                </div>
+                </nav>
             </header>
             {/* Main Content Area */}
             <main className="flex-1 overflow-y-auto px-6 pb-6">
                 {safeTab === "dashboard" && <DistributionDashboard />}
-                {safeTab === "inventory" && <InventoryView userRole={userRole} />}
+                {safeTab === "inventory" && (
+                    <InventoryView userRole={userRole} />
+                )}
                 {safeTab === "sales" && <SalesPOSView />}
                 {safeTab === "history" && <SalesHistoryView />}
                 {safeTab === "returns" && <SalesReturnsView />}
                 {safeTab === "customers" && <CustomersView />}
                 {safeTab === "receivables" && <ReceivablesView />}
                 {safeTab === "cash" && <CashRegisterView />}
-                {safeTab === "suppliers" && <SuppliersView userRole={userRole} />}
+                {safeTab === "suppliers" && (
+                    <SuppliersView userRole={userRole} />
+                )}
                 {safeTab === "employees" && <EmployeesView />}
                 {safeTab === "tax" && <TaxAndInvoicingView />}
                 {safeTab === "reportes" && <DailyCloseReportView />}
