@@ -24,12 +24,15 @@ export async function PATCH(
 
     // Negative-value guard: cost/price/stock/minAlert are `nonnegative` in the
     // schema, so negative values fail safeParse → 400 before touching the DB.
-    // Stock writes are branch-scoped: a stock/minAlert update requires the
-    // branchId (mismatched branch → 404/400 repo-side; never cross-branch).
-    if (
-      (parsed.data.stock !== undefined || parsed.data.minAlert !== undefined) &&
-      parsed.data.branchId === undefined
-    ) {
+    // Fase 0: direct stock writes are gone — the parameter stays parseable so
+    // legacy clients fail LOUDLY here instead of silently losing the field,
+    // and the repository.double-guards it (400) for non-route callers.
+    if (parsed.data.stock !== undefined) {
+      throw new ApiError(400, 'El stock solo se ajusta mediante movimientos de inventario');
+    }
+    // minAlert is still branch-scoped: without the branchId it would be
+    // ambiguous which branch's alert threshold the operator means.
+    if (parsed.data.minAlert !== undefined && parsed.data.branchId === undefined) {
       throw new ApiError(400, 'Debe indicar la sucursal para actualizar el stock');
     }
 
@@ -41,7 +44,6 @@ export async function PATCH(
         : {}),
       ...(parsed.data.cost !== undefined ? { cost: parsed.data.cost } : {}),
       ...(parsed.data.price !== undefined ? { price: parsed.data.price } : {}),
-      ...(parsed.data.stock !== undefined ? { stock: parsed.data.stock } : {}),
       ...(parsed.data.minAlert !== undefined ? { minAlert: parsed.data.minAlert } : {}),
       ...(parsed.data.branchId !== undefined ? { branchId: parsed.data.branchId } : {}),
     });

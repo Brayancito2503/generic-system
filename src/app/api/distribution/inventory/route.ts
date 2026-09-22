@@ -11,7 +11,10 @@ const repository = new PrismaDistributionRepository();
 
 export async function GET(request: NextRequest) {
   try {
-    await requireApiAuth(['CASHIER', 'STAFF', 'TENANT_ADMIN']);
+// Read-only for ACCOUNTANT (costs/margins are already visible to them in
+    // reports); writes stay CASHIER/STAFF/TENANT_ADMIN with PATCH/DELETE
+    // restricted further in [id]/route.ts.
+    await requireApiAuth(['CASHIER', 'STAFF', 'TENANT_ADMIN', 'ACCOUNTANT']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 
@@ -29,7 +32,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    await requireApiAuth(['CASHIER', 'STAFF', 'TENANT_ADMIN']);
+    const session = await requireApiAuth(['CASHIER', 'STAFF', 'TENANT_ADMIN']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 
@@ -45,6 +48,8 @@ export async function POST(request: NextRequest) {
       price: parsed.data.price,
       stock: parsed.data.stock,
       minAlert: parsed.data.minAlert,
+      // Ledger origin: the operator of the INITIAL movement.
+      userId: session.userId,
     });
 
     return NextResponse.json(created, { status: 201 });

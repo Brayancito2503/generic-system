@@ -3,11 +3,13 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { Package, Search, Plus, AlertTriangle, TrendingUp, TrendingDown, Edit2, X, Loader2, Trash2 } from 'lucide-react';
+import { Package, Search, Plus, AlertTriangle, TrendingUp, TrendingDown, Edit2, X, Loader2, Trash2, ClipboardCheck, History } from 'lucide-react';
 import type { InventoryStockItem, PurchaseOrderEntity, CashSessionEntity } from '../entities';
 import { apiGet, apiSend } from '../api';
-import { isCashier } from '../lib/roles';
+import { isCashier, isAccountant, hasFullAccess } from '../lib/roles';
 import { formatCurrency } from '../utils/currency';
+import { InventoryCountView } from './InventoryCountView';
+import { InventoryMovementsView } from './InventoryMovementsView';
 
 interface ProductFormData {
   sku: string; name: string; description: string;
@@ -15,6 +17,8 @@ interface ProductFormData {
 }
 
 const emptyForm: ProductFormData = { sku: '', name: '', description: '', cost: '', price: '', stock: '', minAlert: '5' };
+
+type InventoryTab = 'list' | 'count' | 'movements';
 
 export function InventoryView({ userRole }: { userRole?: string | null }) {
   const t = useTranslations('distributionModule');
@@ -35,10 +39,18 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
   const [deleteTarget, setDeleteTarget] = useState<InventoryStockItem | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  // CASHIER: catalog + create allowed; price/cost edits and deletes are
-  // server-guarded (PATCH/DELETE are STAFF/TENANT_ADMIN-only), so the buttons
-  // are hidden instead of failing with 403.
-  const canEditCatalog = !isCashier(userRole);
+  // Permission model — mirrors the server route guards so restricted profiles
+  // never see buttons whose routes would reject them (403-noise):
+  //   GET (list)                 : CASHIER, STAFF, TENANT_ADMIN, ACCOUNTANT
+  //   POST (create / Alta)       : CASHIER, STAFF, TENANT_ADMIN
+  //   PATCH/DELETE (edit/delete) : STAFF, TENANT_ADMIN (legacy full access)
+  //   count / movements / adj.   : ACCOUNTANT, STAFF, TENANT_ADMIN
+  const canCreate = !isAccountant(userRole); // unknown/loading role → visible, like hasFullAccess
+  const canEditCatalog = hasFullAccess(userRole);
+  // Ledger sub-views (physical count + movements/adjustments) are off the POS
+  // surface: their routes are ACCOUNTANT/STAFF/TENANT_ADMIN-only.
+  const canUseLedger = !isCashier(userRole);
+  const [tab, setTab] = useState<InventoryTab>('list');
 
   const { data: items = [], isPending, isError } = useQuery<InventoryStockItem[]>({
     queryKey: ['inventory'],
@@ -48,10 +60,11 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
   // There is no branch selector endpoint: the tenant's branch is derived from
   // server data (existing purchase order or open cash session), same as in the
   // purchase orders view. Stock writes cannot happen without it (400 server-side).
-  // CASHIER cannot write stock (PATCH/DELETE are STAFF/TENANT_ADMIN-only) and
-  // has no access to these endpoints, so the fetches are skipped for the POS
-  // profile instead of producing 403 console noise; branchId stays '' and no
-  // column depends on it in this view.
+  // CASHIER cannot write stock and has no access to these endpoints, so the
+  // fetches are skipped for the POS profile instead of producing 403 console
+  // noise; branchId stays '' and no column depends on it in this view.
+  // ACCOUNTANT CAN read both endpoints (their GET guards include the role), so
+  // branchId keeps resolving for the ledger sub-views.
   const cashier = isCashier(userRole);
   const { data: orders = [] } = useQuery<PurchaseOrderEntity[]>({
     queryKey: ['purchase-orders'],
@@ -117,17 +130,18 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
     };
     if (editId) {
       const target = items.find((i) => i.id === editId);
-      // The stock/minAlert fields are only sent when they actually changed:
-      // sending them without a branchId is a 400 server-side, so catalog-only
-      // edits must omit them when no branch is derivable.
-      const stockChanged = !target || stock !== target.stock || minAlert !== target.minAlert;
-      if (stockChanged && !branchId) {
+      // Fase 0: stock is NOT editable here anymore — it changes only through
+      // ledger movements (create sets INITIAL; receive/sale/return/adjustment/
+      // count move it). minAlert stays branch-scoped: sending it without a
+      // branchId is a 400 server-side, so catalog-only edits omit both.
+      const minAlertChanged = !target || minAlert !== target.minAlert;
+      if (minAlertChanged && !branchId) {
         setFormError(new Error(t('inventory.noBranchStockHint')));
         return;
       }
       updateMutation.mutate({
         id: editId,
-        payload: stockChanged ? { ...catalog, stock, minAlert, branchId } : catalog,
+        payload: minAlertChanged ? { ...catalog, minAlert, branchId } : catalog,
       });
     } else {
       createMutation.mutate({ ...catalog, stock, minAlert });
@@ -161,15 +175,49 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
           </h1>
           <p className="text-sm text-muted-foreground mt-1">{t('inventory.subtitle')}</p>
         </div>
-        <button
-          type="button"
-          onClick={openCreate}
-          className="flex items-center gap-2 bg-primary text-primary-foreground text-sm font-medium px-4 py-2.5 rounded-lg transition-colors shadow-xs"
-        >
-          <Plus className="w-4 h-4" /> {t('inventory.addProduct')}
-        </button>
+        {canCreate && (
+          <button
+            type="button"
+            onClick={openCreate}
+            className="flex items-center gap-2 bg-primary text-primary-foreground text-sm font-medium px-4 py-2.5 rounded-lg transition-colors shadow-xs"
+          >
+            <Plus className="w-4 h-4" /> {t('inventory.addProduct')}
+          </button>
+        )}
       </div>
 
+      {/* Ledger sub-nav: hidden for CASHIER (routes are 403 for the POS) */}
+      {canUseLedger && (
+        <div className="flex gap-1 bg-muted/50 border border-border rounded-lg p-1 w-fit">
+          {(
+            [
+              { key: 'list', label: t('inventory.tabList'), icon: Package },
+              { key: 'count', label: t('inventory.tabCount'), icon: ClipboardCheck },
+              { key: 'movements', label: t('inventory.tabMovements'), icon: History },
+            ] as const
+          ).map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setTab(key)}
+              className={`flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg transition-colors ${
+                tab === key
+                  ? 'bg-card text-foreground shadow-xs border border-border'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Icon className="w-4 h-4" /> {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {tab === 'count' ? (
+        <InventoryCountView branchId={branchId} />
+      ) : tab === 'movements' ? (
+        <InventoryMovementsView branchId={branchId} />
+      ) : (
+        <>
       {/* Stats Row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
@@ -274,6 +322,8 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
           </div>
         </div>
       )}
+        </>
+      )}
 
       {/* Modal de Producto */}
       {showForm && (
@@ -290,7 +340,11 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
                 { labelKey: 'fieldDescription', placeholderKey: 'placeholderDescription', key: 'description', full: true },
                 { labelKey: 'fieldCost', placeholderKey: 'placeholderCost', key: 'cost', full: false },
                 { labelKey: 'fieldPrice', placeholderKey: 'placeholderPrice', key: 'price', full: false },
-                { labelKey: 'fieldStock', placeholderKey: 'placeholderStock', key: 'stock', full: false },
+                // Stock is only settable at CREATE (INITIAL ledger row); on
+                // edit it moves exclusively through ledger movements.
+                ...(editId
+                  ? []
+                  : [{ labelKey: 'fieldStock', placeholderKey: 'placeholderStock', key: 'stock', full: false }]),
                 { labelKey: 'fieldMinAlert', placeholderKey: 'placeholderMinAlert', key: 'minAlert', full: false },
               ].map(f => (
                 <div key={f.key} className={f.full ? 'col-span-2' : 'col-span-1'}>
@@ -304,6 +358,11 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
                 </div>
               ))}
             </div>
+            {editId && (
+              <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 border border-border rounded-lg px-3 py-2">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {t('inventory.stockViaMovementsHint')}
+              </div>
+            )}
             {modalError && (
               <div className="mt-4 flex items-center gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-lg px-3 py-2">
                 <AlertTriangle className="w-4 h-4 shrink-0" /> {modalError.message}

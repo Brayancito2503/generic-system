@@ -15,7 +15,7 @@ export async function POST(
     // entry exists), so the mutation stays out of the POS surface. If
     // cashier-initiated returns land on the product roadmap, ship the UI (a
     // returns entry in the cashier POS) and reopen this permission TOGETHER.
-    await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
+    const session = await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 
@@ -32,6 +32,8 @@ export async function POST(
     const saleReturn = await repository.createSaleReturn(tenantId, id, {
       items: parsed.data.items,
       reason: parsed.data.reason ?? null,
+      // Operator of the RETURN ledger rows.
+      userId: session.userId,
     });
     return NextResponse.json(saleReturn, { status: 201 });
   } catch (error) {

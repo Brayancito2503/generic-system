@@ -11,7 +11,12 @@ import type {
   EmployeeEntity,
   FiscalSummary,
   InvoicingConfigEntity,
+  InventoryAdjustmentEntity,
+  InventoryAdjustmentReason,
+  InventoryMovementEntity,
+  InventoryMovementType,
   InventoryStockItem,
+  MermaSummary,
   PaginatedResult,
   PaymentMethod,
   PurchaseOrderEntity,
@@ -31,6 +36,8 @@ export interface CreateInventoryItemInput {
   price: number;
   stock: number;
   minAlert: number;
+  /** Session user that created the item (writes the INITIAL ledger row). */
+  userId: string;
 }
 
 export interface UpdateInventoryItemInput {
@@ -39,6 +46,11 @@ export interface UpdateInventoryItemInput {
   description?: string;
   cost?: number;
   price?: number;
+  /**
+   * Direct stock writes are REMOVED (Fase 0): the repository rejects any
+   * provided `stock` with 400 — stock changes only through ledger movements
+   * (receive / sale / return / adjustment / count).
+   */
   stock?: number;
   minAlert?: number;
   /**
@@ -150,6 +162,8 @@ export interface ReceivePurchaseOrderLineInput {
 
 export interface ReceivePurchaseOrderInput {
   receivedItems: ReceivePurchaseOrderLineInput[];
+  /** Session user receiving the goods (writes the RECEIVE ledger rows). */
+  userId: string;
 }
 
 // ─── P0 contracts: employees (update / deactivate / POS PIN link) ───────────
@@ -211,6 +225,8 @@ export interface RegisterSaleInput {
   paymentMethod: PaymentMethod;
   /** Amount tendered/paid at sale time; balance = total - paidAmount (server-side). */
   paidAmount?: number;
+  /** Session user selling (writes the SALE ledger rows). */
+  userId: string;
 }
 
 // ─── P1 contracts: returns / receivables ─────────────────────────────────────
@@ -223,11 +239,53 @@ export interface SaleReturnLineInput {
 export interface CreateSaleReturnInput {
   items: SaleReturnLineInput[];
   reason?: string | null;
+  /** Session user processing the return (writes the RETURN ledger rows). */
+  userId: string;
 }
 
 export interface PayReceivableInput {
   amount: number;
   method: PaymentMethod;
+}
+
+// ─── Fase 0/1 contracts: inventory ledger (kardex) ───────────────────────────
+
+/** Filters shared by the ledger list endpoints (all optional, tenant-scoped). */
+export interface ListInventoryMovementsFilter {
+  branchId?: string;
+  itemId?: string;
+  type?: InventoryMovementType;
+  /** Only meaningful combined with `type: 'ADJUSTMENT'` (adjustments list). */
+  reason?: InventoryAdjustmentReason;
+  from?: Date;
+  to?: Date;
+}
+
+export interface CreateInventoryAdjustmentInput {
+  branchId: string;
+  itemId: string;
+  /**
+   * Signed per convention: negative for losses (MERMA/ROTURA/VENCIMIENTO/
+   * DESCUADRE), positive for SOBRANTE. The repository rejects a sign that does
+   * not match the reason (400) and a negative adjustment that would push the
+   * resulting stock below zero (409).
+   */
+  quantity: number;
+  reason: InventoryAdjustmentReason;
+  notes?: string | null;
+  userId: string;
+}
+
+/** One counted line of a physical-count batch. */
+export interface CountBatchItemInput {
+  itemId: string;
+  countedQuantity: number;
+}
+
+export interface CreateInventoryCountBatchInput {
+  branchId: string;
+  items: CountBatchItemInput[];
+  userId: string;
 }
 
 export interface IDistributionRepository {
@@ -383,7 +441,47 @@ export interface IDistributionRepository {
   /**
    * Daily close report for a calendar day (America/Managua, UTC-6): aggregated
    * sales lines by item (cost snapshot × qty vs price × qty), sale totals,
-   * payment-method breakdown and credit collections received that day.
+   * payment-method breakdown, credit collections received that day, and the
+   * day's shrinkage (`mermaCost`, Σ negative ADJUSTMENT costSnapshots) inside
+   * the same window.
    */
   getDailyCloseReport(tenantId: string, date: string): Promise<DailyCloseReport>;
+  /**
+   * Registers one manual/automated stock adjustment: validates branch + item
+   * under the tenant (404), enforces the sign-vs-reason convention (400),
+   * rejects negative adjustments that would leave stock below zero (409), then
+   * applies the signed stock change + ADJUSTMENT ledger row in one transaction
+   * (cost snapshot = current Item.cost).
+   */
+  createInventoryAdjustment(
+    tenantId: string,
+    input: CreateInventoryAdjustmentInput
+  ): Promise<InventoryAdjustmentEntity>;
+  /**
+   * Physical-count batch: computes diff = countedQuantity − book stock for each
+   * item, skips zero diffs, and creates one SOBRANTE (diff > 0) or MERMA
+   * (diff < 0) adjustment per changed item inside a single transaction
+   * (notes 'Diferencia por conteo físico'). Returns the created adjustments.
+   */
+  createInventoryCountBatch(
+    tenantId: string,
+    input: CreateInventoryCountBatchInput
+  ): Promise<InventoryAdjustmentEntity[]>;
+  /**
+   * Ledger list, newest first, tenant-scoped with optional branch/item/type/
+   * reason/date-window filters. Each row is converted to numbers via
+   * Decimal.toNumber().
+   */
+  listInventoryMovements(
+    tenantId: string,
+    filter?: ListInventoryMovementsFilter
+  ): Promise<InventoryMovementEntity[]>;
+  /**
+   * Merma P&L summary over ADJUSTMENT movements in the window: losses
+   * (quantity < 0) and positive corrections (quantity > 0), plus row count.
+   */
+  getMermaSummary(
+    tenantId: string,
+    filter?: { branchId?: string; from?: Date; to?: Date }
+  ): Promise<MermaSummary>;
 }

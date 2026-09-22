@@ -37,6 +37,30 @@ enum AccessRole {
   MANAGER
 }
 
+// Kardex ledger: every Inventory.stock mutation writes one InventoryMovement
+// row inside the same transaction. TRANSFER_OUT/TRANSFER_IN are reserved for
+// the branch-transfer milestone (Fase 3) and are not written yet.
+enum InventoryMovementType {
+  INITIAL
+  RECEIVE
+  SALE
+  RETURN
+  ADJUSTMENT
+  TRANSFER_OUT
+  TRANSFER_IN
+}
+
+// Reason for an ADJUSTMENT movement. SOBRANTE = positive correction (found
+// more than the book); MERMA/ROTURA/VENCIMIENTO/DESCUADRE = losses.
+// DESCUADRE covers unclassified differences (never labeled "theft").
+enum InventoryAdjustmentReason {
+  MERMA
+  ROTURA
+  VENCIMIENTO
+  DESCUADRE
+  SOBRANTE
+}
+
 model Tenant {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -76,6 +100,7 @@ model Branch {
   createdAt DateTime @default(now())
 
   inventories    Inventory[]
+  inventoryMovements InventoryMovement[]
   purchaseOrders PurchaseOrder[]
   employees      Employee[]
   cashSessions   CashSession[]
@@ -135,6 +160,7 @@ model Item {
   createdAt   DateTime @default(now())
 
   inventory          Inventory[]
+  inventoryMovements InventoryMovement[]
   saleItems          SaleItem[]
   purchaseOrderItems PurchaseOrderItem[]
   saleReturnItems    SaleReturnItem[]
@@ -150,10 +176,36 @@ model Inventory {
   item     Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
   branchId String
   branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  stock    Int    @default(0)
+  stock    Decimal @db.Decimal(10, 2) @default(0)
   minAlert Int    @default(5)
 
   @@unique([tenantId, itemId, branchId])
+}
+
+// Kardex ledger row: one per stock variation, written in the same transaction
+// as the Inventory.stock change. `quantity` follows the sign convention of the
+// vertical: SALE/loss adjustments negative, RECEIVE/RETURN/SOBRANTE positive,
+// INITIAL signed as given. `costSnapshot` is the unit cost at movement time so
+// margins and merma totals survive later cost changes.
+model InventoryMovement {
+  id           String                   @id @default(cuid())
+  tenantId     String
+  branchId     String
+  branch       Branch                   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  itemId       String
+  item         Item                     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  type         InventoryMovementType
+  quantity     Decimal                  @db.Decimal(10, 2)
+  reason       InventoryAdjustmentReason?
+  costSnapshot Decimal                  @db.Decimal(10, 2)
+  notes        String?
+  userId       String
+  refId        String? // sale / purchase order / return id that caused it
+  createdAt    DateTime                 @default(now())
+
+  @@index([tenantId, branchId, itemId, createdAt])
+  @@index([tenantId, type, createdAt])
+  @@index([tenantId, createdAt])
 }
 
 model Sale {

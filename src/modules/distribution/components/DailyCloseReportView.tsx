@@ -11,6 +11,7 @@ import {
   HandCoins,
   Loader2,
   Printer,
+  TrendingDown,
   TrendingUp,
   Wallet,
 } from 'lucide-react';
@@ -129,7 +130,7 @@ export function DailyCloseReportView() {
             </div>
 
             {/* Summary cards */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
               <div className="bg-card border border-border rounded-xl p-4 shadow-xs">
                 <p className="text-xs text-muted-foreground flex items-center gap-1.5">
                   <Banknote className="w-3.5 h-3.5" /> {t('reports.totalSales')}
@@ -162,6 +163,25 @@ export function DailyCloseReportView() {
                 </p>
                 <p className="text-xl font-bold mt-1">
                   {fmt(report.collectionsTotal)}
+                </p>
+              </div>
+              {/* Day shrinkage: losses from stock adjustments inside the same
+                  UTC-6 window (positive corrections never offset it here). */}
+              <div className="bg-card border border-border rounded-xl p-4 shadow-xs">
+                <p
+                  className="text-xs text-muted-foreground flex items-center gap-1.5"
+                  title={t('reports.mermaSub')}
+                >
+                  <TrendingDown className="w-3.5 h-3.5" /> {t('reports.mermaTotal')}
+                </p>
+                <p
+                  className={`text-xl font-bold mt-1 ${
+                    report.mermaCost > 0
+                      ? 'text-red-600 dark:text-red-400'
+                      : 'text-emerald-600 dark:text-emerald-400'
+                  }`}
+                >
+                  {fmt(report.mermaCost)}
                 </p>
               </div>
             </div>

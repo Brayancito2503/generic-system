@@ -24,6 +24,9 @@ import type {
   RegisterSaleInput,
   CreateSaleReturnInput,
   PayReceivableInput,
+  CreateInventoryAdjustmentInput,
+  CreateInventoryCountBatchInput,
+  ListInventoryMovementsFilter,
 } from '@/core/ports/distribution-repository.port';
 import type {
   AccessRole,
@@ -39,7 +42,12 @@ import type {
   EmployeeEntity,
   FiscalSummary,
   InvoicingConfigEntity,
+  InventoryAdjustmentEntity,
+  InventoryAdjustmentReason,
+  InventoryMovementEntity,
+  InventoryMovementType,
   InventoryStockItem,
+  MermaSummary,
   PaginatedResult,
   PaymentMethod,
   PurchaseOrderEntity,
@@ -77,6 +85,56 @@ function userRoleForAccessRole(accessRole: AccessRole | null | undefined) {
 
 /** Employee row with its Person graph, shared by the entity mapper methods. */
 type EmployeeWithPerson = Prisma.EmployeeGetPayload<{ include: { person: true } }>;
+
+/** Movement row with its Item name (the operator name is joined separately). */
+type MovementWithGraph = Prisma.InventoryMovementGetPayload<{
+  include: { item: { select: { name: true } } };
+}>;
+
+/** Signed movement params shared by every stock mutation (the ledger backbone). */
+interface MovementParams {
+  tenantId: string;
+  branchId: string;
+  itemId: string;
+  type: InventoryMovementType;
+  quantity: number; // signed per convention (SALE/loss negative, IN/positive corrections positive)
+  costSnapshot: number;
+  userId: string;
+  reason?: InventoryAdjustmentReason | null;
+  notes?: string | null;
+  refId?: string | null;
+}
+
+/**
+ * Writes one kardex row inside the caller's transaction. Every stock
+ * variation in this repository MUST go through this helper so the ledger and
+ * the Inventory.stock column can never diverge.
+ */
+async function recordMovement(
+  tx: Prisma.TransactionClient,
+  params: MovementParams
+): Promise<void> {
+  await tx.inventoryMovement.create({
+    data: {
+      tenantId: params.tenantId,
+      branchId: params.branchId,
+      itemId: params.itemId,
+      type: params.type,
+      quantity: params.quantity,
+      costSnapshot: params.costSnapshot,
+      userId: params.userId,
+      reason: params.reason ?? null,
+      notes: params.notes ?? null,
+      refId: params.refId ?? null,
+    },
+  });
+}
+
+/** Resolves the operator display name from the User → Person graph. */
+function userNameOf(user: { person: { firstName: string; lastName: string } | null } | null): string | undefined {
+  if (!user?.person) return undefined;
+  return `${user.person.firstName} ${user.person.lastName}`.trim();
+}
 
 const DAY_LABELS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'] as const;
 
@@ -243,9 +301,17 @@ export class PrismaDistributionRepository implements IDistributionRepository {
 
     const totalProducts = await prisma.item.count({ where: { tenantId } });
 
-    const lowStockItems = await prisma.inventory.count({
-      where: { tenantId, stock: { lt: prisma.inventory.fields.minAlert } },
+    // Column-vs-column (stock < minAlert) is not expressible in Prisma filters
+    // when one side is Decimal and the other Int (FieldRef types must match),
+    // so the count runs over a light projection; inventory rows per tenant are
+    // small.
+    const inventoryRows = await prisma.inventory.findMany({
+      where: { tenantId },
+      select: { stock: true, minAlert: true },
     });
+    const lowStockItems = inventoryRows.filter(
+      (r) => r.stock.toNumber() < r.minAlert
+    ).length;
 
     const activeEmployees = await prisma.employee.count({
       where: { tenantId, isActive: true },
@@ -375,9 +441,9 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       description: row.item.description,
       cost: row.item.cost.toNumber(),
       price: row.item.price.toNumber(),
-      stock: row.stock,
+      stock: row.stock.toNumber(),
       minAlert: row.minAlert,
-      isLowStock: row.stock < row.minAlert,
+      isLowStock: row.stock.toNumber() < row.minAlert,
     }));
   }
 
@@ -399,27 +465,44 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       sku = await nextItemSku(tenantId);
     }
 
-    const item = await prisma.item.create({
-      data: {
-        tenantId,
-        sku,
-        name: input.name,
-        description: input.description || null,
-        cost: input.cost,
-        price: input.price,
-        isService: false,
-        attributes: {},
-      },
-    });
+    // Item + Inventory row + the INITIAL kardex row land in ONE transaction:
+    // a new product always starts with its ledger origin.
+    const { item, inv } = await prisma.$transaction(async (tx) => {
+      const item = await tx.item.create({
+        data: {
+          tenantId,
+          sku,
+          name: input.name,
+          description: input.description || null,
+          cost: input.cost,
+          price: input.price,
+          isService: false,
+          attributes: {},
+        },
+      });
 
-    const inv = await prisma.inventory.create({
-      data: {
+      const inv = await tx.inventory.create({
+        data: {
+          tenantId,
+          itemId: item.id,
+          branchId: branch.id,
+          stock: input.stock,
+          minAlert: input.minAlert,
+        },
+      });
+
+      await recordMovement(tx, {
         tenantId,
-        itemId: item.id,
         branchId: branch.id,
-        stock: input.stock,
-        minAlert: input.minAlert,
-      },
+        itemId: item.id,
+        type: 'INITIAL',
+        quantity: input.stock,
+        costSnapshot: input.cost,
+        userId: input.userId,
+        notes: 'Stock inicial',
+      });
+
+      return { item, inv };
     });
 
     return {
@@ -430,9 +513,9 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       description: item.description,
       cost: item.cost.toNumber(),
       price: item.price.toNumber(),
-      stock: inv.stock,
+      stock: inv.stock.toNumber(),
       minAlert: inv.minAlert,
-      isLowStock: inv.stock < inv.minAlert,
+      isLowStock: inv.stock.toNumber() < inv.minAlert,
     };
   }
 
@@ -447,6 +530,16 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     });
     if (!existing) {
       throw new ApiError(404, 'Producto no encontrado');
+    }
+
+    // Fase 0: direct stock writes are REMOVED. From now on stock changes ONLY
+    // through ledger movements (receive / sale / return / adjustment / count);
+    // the route rejects `stock` payloads too, this is the hard double guard.
+    if (input.stock !== undefined) {
+      throw new ApiError(
+        400,
+        'El stock solo se ajusta mediante movimientos de inventario'
+      );
     }
 
     const itemData: {
@@ -469,10 +562,10 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       if (skuConflict) throw new ApiError(409, 'El SKU ya existe');
     }
 
-    // Stock writes are branch-scoped: they touch ONLY the targeted branch's
-    // Inventory row. Item-level fields (sku/name/description/cost/price) are
-    // branch-independent and update without a branchId.
-    let inv: { stock: number; minAlert: number } | null = existing.inventory[0] ?? null;
+    // minAlert stays branch-scoped: it touches ONLY the targeted branch's
+    // Inventory row, and still requires the branchId guard below.
+    let inv: { stock: Prisma.Decimal; minAlert: number } | null =
+      existing.inventory[0] ?? null;
     if (input.branchId !== undefined) {
       const branch = await prisma.branch.findFirst({
         where: { id: input.branchId, tenantId },
@@ -492,13 +585,12 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       inv = await prisma.inventory.update({
         where: { id: target.id },
         data: {
-          stock: input.stock ?? target.stock,
           minAlert: input.minAlert ?? target.minAlert,
         },
       });
-    } else if (input.stock !== undefined || input.minAlert !== undefined) {
+    } else if (input.minAlert !== undefined) {
       // The route rejects this before it reaches the repo; the double guard
-      // makes it impossible for a stock write without a branch to silently
+      // makes it impossible for a minAlert write without a branch to silently
       // mutate inventory[0] (the legacy cross-branch bug this replaces).
       throw new ApiError(400, 'Debe indicar la sucursal para actualizar el stock');
     }
@@ -508,7 +600,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       data: itemData,
     });
 
-    const stock = inv?.stock ?? input.stock ?? 0;
+    const stock = inv?.stock.toNumber() ?? 0;
     const minAlert = inv?.minAlert ?? input.minAlert ?? 0;
 
     return {
@@ -533,18 +625,22 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       throw new ApiError(404, 'Producto no encontrado');
     }
 
-    // Reference guard: an item referenced by sales, purchase orders or
-    // returns is never deletable (its price/qty history must stay intact).
-    // Cash movements carry no item reference in the schema.
-    const [saleRefs, poRefs, returnRefs] = await Promise.all([
+    // Reference guard: an item referenced by sales, purchase orders, returns
+    // or LEDGER movements is never deletable (its price/qty history must stay
+    // intact). Cash movements carry no item reference in the schema. Since
+    // every item created under the ledger flow writes an INITIAL row, all new
+    // products are protected; legacy seeded items remain deletable only if
+    // still unreferenced.
+    const [saleRefs, poRefs, returnRefs, movementRefs] = await Promise.all([
       prisma.saleItem.count({ where: { itemId } }),
       prisma.purchaseOrderItem.count({ where: { itemId } }),
       prisma.saleReturnItem.count({ where: { itemId } }),
+      prisma.inventoryMovement.count({ where: { itemId } }),
     ]);
-    if (saleRefs + poRefs + returnRefs > 0) {
+    if (saleRefs + poRefs + returnRefs + movementRefs > 0) {
       throw new ApiError(
         409,
-        'No se puede eliminar el producto: tiene ventas, órdenes de compra o devoluciones registradas'
+        'No se puede eliminar el producto: tiene ventas, órdenes de compra, devoluciones o movimientos de inventario registrados'
       );
     }
 
@@ -727,20 +823,55 @@ export class PrismaDistributionRepository implements IDistributionRepository {
 
     const updated = await prisma.$transaction(async (tx) => {
       for (const line of lines) {
-        const inventory = await tx.inventory.updateMany({
-          where: {
-            tenantId,
-            branchId: po.branchId,
-            itemId: line.itemId,
-          },
-          data: { stock: { increment: line.quantity } },
-        });
-        if (inventory.count === 0) {
+        const poItem = po.items.find((i) => i.itemId === line.itemId)!;
+        // ledger line unit cost = the PO line cost snapshot.
+        const lineCost = poItem.cost.toNumber();
+
+        const [item, inventory] = await Promise.all([
+          tx.item.findFirst({ where: { tenantId, id: line.itemId } }),
+          tx.inventory.findFirst({
+            where: { tenantId, branchId: po.branchId, itemId: line.itemId },
+          }),
+        ]);
+        if (!item) {
+          throw new ApiError(400, 'El producto no pertenece a la orden de compra');
+        }
+        if (!inventory) {
           throw new ApiError(
             400,
             'No existe inventario para ese producto en la sucursal de la orden'
           );
         }
+
+        // Weighted-average cost, computed from PRE-receive values inside the
+        // tx: newCost = (oldStock·oldCost + qty·lineCost) / (oldStock + qty);
+        // a first arrival (oldStock = 0) simply adopts the line cost.
+        const oldStock = inventory.stock.toNumber();
+        const oldCost = item.cost.toNumber();
+        const newStock = oldStock + line.quantity;
+        const newCost =
+          oldStock === 0
+            ? lineCost
+            : round2((oldStock * oldCost + line.quantity * lineCost) / newStock);
+
+        await tx.item.update({
+          where: { id: item.id },
+          data: { cost: newCost },
+        });
+        await tx.inventory.update({
+          where: { id: inventory.id },
+          data: { stock: { increment: line.quantity } },
+        });
+        await recordMovement(tx, {
+          tenantId,
+          branchId: po.branchId,
+          itemId: line.itemId,
+          type: 'RECEIVE',
+          quantity: line.quantity,
+          costSnapshot: lineCost,
+          userId: input.userId,
+          refId: po.id,
+        });
         await tx.purchaseOrderItem.updateMany({
           where: { orderId: po.id, itemId: line.itemId },
           data: { receivedQty: { increment: line.quantity } },
@@ -1883,6 +2014,22 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         });
       }
 
+      // Ledger: one SALE row per sold line (negative quantity), cost snapshot
+      // exactly as stored on SaleItem at creation time — kardex costs and
+      // daily-close margins can never disagree.
+      for (const si of created.items) {
+        await recordMovement(tx, {
+          tenantId,
+          branchId,
+          itemId: si.itemId,
+          type: 'SALE',
+          quantity: -si.quantity,
+          costSnapshot: si.cost.toNumber(),
+          userId: input.userId,
+          refId: created.id,
+        });
+      }
+
       return created;
     });
 
@@ -2157,6 +2304,27 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         },
       });
 
+      // Ledger: one RETURN row per returned line (positive quantity) with the
+      // ORIGINAL sale cost snapshot — goods re-enter at the cost they left,
+      // keeping weighted-average cost and daily-close margins stable. Mirrors
+      // the stock restore above: no movement when the sale had no branch
+      // (nothing was touched in that case).
+      if (branchId) {
+        for (const line of lines) {
+          const saleItem = sale.items.find((si) => si.itemId === line.itemId)!;
+          await recordMovement(tx, {
+            tenantId,
+            branchId,
+            itemId: line.itemId,
+            type: 'RETURN',
+            quantity: line.quantity,
+            costSnapshot: saleItem.cost.toNumber(),
+            userId: input.userId,
+            refId: saleReturn.id,
+          });
+        }
+      }
+
       return {
         id: saleReturn.id,
         tenantId: saleReturn.tenantId,
@@ -2309,7 +2477,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     const start = new Date(`${date}T00:00:00-06:00`);
     const end = new Date(`${date}T23:59:59.999-06:00`);
 
-    const [sales, payments] = await Promise.all([
+    const [sales, payments, adjustments] = await Promise.all([
       prisma.sale.findMany({
         where: {
           tenantId,
@@ -2322,7 +2490,29 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         where: { tenantId, createdAt: { gte: start, lte: end } },
         include: { receivable: { include: { person: true } } },
       }),
+      prisma.inventoryMovement.findMany({
+        where: {
+          tenantId,
+          type: 'ADJUSTMENT',
+          createdAt: { gte: start, lte: end },
+        },
+        select: { quantity: true, costSnapshot: true },
+      }),
     ]);
+
+    // Day shrinkage (merma): Σ costSnapshot × |quantity| over ADJUSTMENT rows
+    // with quantity < 0 inside the same UTC-6 window. Positive corrections
+    // (SOBRANTE) never offset the loss here — the daily close shows the real
+    // shrinkage for the period.
+    const mermaCost = round2(
+      adjustments.reduce(
+        (acc, m) =>
+          m.quantity.toNumber() < 0
+            ? acc + m.costSnapshot.toNumber() * Math.abs(m.quantity.toNumber())
+            : acc,
+        0
+      )
+    );
 
     // Aggregate the day's lines by item: totals come from the cost snapshot
     // written at sale time (SaleItem.cost), never the live Item.cost.
@@ -2416,6 +2606,267 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       paymentBreakdown,
       collections,
       collectionsTotal,
+      mermaCost,
+    };
+  }
+
+  // ─── Fase 0/1: inventory ledger (kardex) ────────────────────────────────────
+
+  /** Maps a ledger row (with its Item name) to its entity. */
+  private toMovementEntity(m: MovementWithGraph, userName?: string): InventoryMovementEntity {
+    return {
+      id: m.id,
+      tenantId: m.tenantId,
+      branchId: m.branchId,
+      itemId: m.itemId,
+      itemName: m.item.name,
+      type: m.type as InventoryMovementType,
+      quantity: m.quantity.toNumber(),
+      reason: m.reason as InventoryAdjustmentReason | null,
+      costSnapshot: m.costSnapshot.toNumber(),
+      notes: m.notes,
+      userId: m.userId,
+      userName,
+      refId: m.refId,
+      createdAt: m.createdAt,
+    };
+  }
+
+  async createInventoryAdjustment(
+    tenantId: string,
+    input: CreateInventoryAdjustmentInput
+  ): Promise<InventoryAdjustmentEntity> {
+    if (input.quantity === 0) {
+      throw new ApiError(400, 'La cantidad no puede ser cero');
+    }
+    // Sign convention: SOBRANTE fixes a positive difference; the loss reasons
+    // are negative by definition. Mismatch → 400 before anything is written.
+    const isSobrante = input.reason === 'SOBRANTE';
+    if (isSobrante ? input.quantity <= 0 : input.quantity >= 0) {
+      throw new ApiError(400, 'La cantidad no coincide con el motivo del ajuste');
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const [branch, item] = await Promise.all([
+        tx.branch.findFirst({ where: { tenantId, id: input.branchId } }),
+        tx.item.findFirst({ where: { tenantId, id: input.itemId } }),
+      ]);
+      if (!branch) throw new ApiError(404, 'Sucursal no encontrada');
+      if (!item) throw new ApiError(404, 'Producto no encontrado');
+
+      const inventory = await tx.inventory.findFirst({
+        where: { tenantId, branchId: input.branchId, itemId: input.itemId },
+      });
+      if (!inventory) {
+        throw new ApiError(
+          400,
+          'No existe inventario de este producto en la sucursal indicada'
+        );
+      }
+
+      // A loss can never push stock below zero → 409 (whole tx rolls back).
+      const currentStock = inventory.stock.toNumber();
+      if (input.quantity < 0 && currentStock + input.quantity < 0) {
+        throw new ApiError(409, 'No hay stock suficiente para el ajuste');
+      }
+
+      await tx.inventory.update({
+        where: { id: inventory.id },
+        data: { stock: { increment: input.quantity } },
+      });
+      const movement = await tx.inventoryMovement.create({
+        data: {
+          tenantId,
+          branchId: input.branchId,
+          itemId: input.itemId,
+          type: 'ADJUSTMENT',
+          quantity: input.quantity,
+          reason: input.reason,
+          costSnapshot: item.cost,
+          notes: input.notes ?? null,
+          userId: input.userId,
+        },
+      });
+      const user = await tx.user.findFirst({
+        where: { tenantId, id: input.userId },
+        include: { person: { select: { firstName: true, lastName: true } } },
+      });
+
+      return {
+        id: movement.id,
+        tenantId,
+        branchId: input.branchId,
+        itemId: input.itemId,
+        itemName: item.name,
+        type: 'ADJUSTMENT' as const,
+        quantity: movement.quantity.toNumber(),
+        reason: input.reason,
+        cost: movement.costSnapshot.toNumber(),
+        notes: movement.notes,
+        userId: input.userId,
+        userName: userNameOf(user),
+        createdAt: movement.createdAt,
+      };
+    });
+
+    return result;
+  }
+
+  async createInventoryCountBatch(
+    tenantId: string,
+    input: CreateInventoryCountBatchInput
+  ): Promise<InventoryAdjustmentEntity[]> {
+    const user = await prisma.user.findFirst({
+      where: { tenantId, id: input.userId },
+      include: { person: { select: { firstName: true, lastName: true } } },
+    });
+    const userName = userNameOf(user);
+
+    const created: InventoryAdjustmentEntity[] = [];
+    await prisma.$transaction(async (tx) => {
+      const branch = await tx.branch.findFirst({
+        where: { tenantId, id: input.branchId },
+      });
+      if (!branch) throw new ApiError(404, 'Sucursal no encontrada');
+
+      for (const item of input.items) {
+        const inventory = await tx.inventory.findFirst({
+          where: { tenantId, branchId: input.branchId, itemId: item.itemId },
+        });
+        if (!inventory) {
+          throw new ApiError(
+            400,
+            'No existe inventario de este producto en la sucursal indicada'
+          );
+        }
+
+        // diff = counted − book; zero diffs are skipped entirely (no noise in
+        // the ledger). Money-safe rounding: the stock and the movement both
+        // receive exactly the same two-decimal value.
+        const diff = round2(item.countedQuantity - inventory.stock.toNumber());
+        if (diff === 0) continue;
+
+        const reason: InventoryAdjustmentReason = diff > 0 ? 'SOBRANTE' : 'MERMA';
+        const item0 = await tx.item.findFirst({
+          where: { tenantId, id: item.itemId },
+        });
+        if (!item0) continue; // unreachable after the inventory hit; defensive
+
+        await tx.inventory.update({
+          where: { id: inventory.id },
+          data: { stock: { increment: diff } },
+        });
+        const movement = await tx.inventoryMovement.create({
+          data: {
+            tenantId,
+            branchId: input.branchId,
+            itemId: item.itemId,
+            type: 'ADJUSTMENT',
+            quantity: diff,
+            reason,
+            costSnapshot: item0.cost,
+            notes: 'Diferencia por conteo físico',
+            userId: input.userId,
+          },
+        });
+
+        created.push({
+          id: movement.id,
+          tenantId,
+          branchId: input.branchId,
+          itemId: item.itemId,
+          itemName: item0.name,
+          type: 'ADJUSTMENT',
+          quantity: diff,
+          reason,
+          cost: movement.costSnapshot.toNumber(),
+          notes: movement.notes,
+          userId: input.userId,
+          userName,
+          createdAt: movement.createdAt,
+        });
+      }
+    });
+
+    return created;
+  }
+
+  async listInventoryMovements(
+    tenantId: string,
+    filter: ListInventoryMovementsFilter = {}
+  ): Promise<InventoryMovementEntity[]> {
+    const where: Prisma.InventoryMovementWhereInput = {
+      tenantId,
+      ...(filter.branchId ? { branchId: filter.branchId } : {}),
+      ...(filter.itemId ? { itemId: filter.itemId } : {}),
+      ...(filter.type ? { type: filter.type } : {}),
+      ...(filter.reason ? { reason: filter.reason } : {}),
+      ...(filter.from || filter.to
+        ? {
+            createdAt: {
+              ...(filter.from ? { gte: filter.from } : {}),
+              ...(filter.to ? { lte: filter.to } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const rows = await prisma.inventoryMovement.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: { item: { select: { name: true } } },
+    });
+
+    // InventoryMovement has no FK to User (audit-only id), so the operator
+    // names resolve in one batched lookup instead of a per-row join.
+    const userIds = [...new Set(rows.map((r) => r.userId))];
+    const users = userIds.length
+      ? await prisma.user.findMany({
+          where: { tenantId, id: { in: userIds } },
+          include: { person: { select: { firstName: true, lastName: true } } },
+        })
+      : [];
+    const userNameById = new Map(users.map((u) => [u.id, userNameOf(u)]));
+
+    return rows.map((m) => this.toMovementEntity(m, userNameById.get(m.userId)));
+  }
+
+  async getMermaSummary(
+    tenantId: string,
+    filter: { branchId?: string; from?: Date; to?: Date } = {}
+  ): Promise<MermaSummary> {
+    const where: Prisma.InventoryMovementWhereInput = {
+      tenantId,
+      type: 'ADJUSTMENT',
+      ...(filter.branchId ? { branchId: filter.branchId } : {}),
+      ...(filter.from || filter.to
+        ? {
+            createdAt: {
+              ...(filter.from ? { gte: filter.from } : {}),
+              ...(filter.to ? { lte: filter.to } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const rows = await prisma.inventoryMovement.findMany({
+      where,
+      select: { quantity: true, costSnapshot: true },
+    });
+
+    let mermaCost = 0;
+    let sobranteCost = 0;
+    for (const row of rows) {
+      const qty = row.quantity.toNumber();
+      const amount = row.costSnapshot.toNumber() * Math.abs(qty);
+      if (qty < 0) mermaCost += amount;
+      else sobranteCost += amount;
+    }
+
+    return {
+      mermaCost: round2(mermaCost),
+      sobranteCost: round2(sobranteCost),
+      count: rows.length,
     };
   }
 }

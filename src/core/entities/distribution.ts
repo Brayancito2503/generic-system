@@ -223,6 +223,82 @@ export interface InventoryStockItem {
   isLowStock: boolean;
 }
 
+// ─── Inventory ledger (kardex) ───────────────────────────────────────────────
+
+/**
+ * Kardex ledger: every Inventory.stock variation writes one InventoryMovement
+ * row inside the same transaction. `quantity` follows the vertical's sign
+ * convention: SALE and loss adjustments negative, RECEIVE/RETURN/SOBRANTE
+ * positive, INITIAL signed as given. TRANSFER_* are reserved for the branch
+ * transfer milestone (Fase 3) and are not written yet.
+ */
+export type InventoryMovementType =
+  | 'INITIAL'
+  | 'RECEIVE'
+  | 'SALE'
+  | 'RETURN'
+  | 'ADJUSTMENT'
+  | 'TRANSFER_OUT'
+  | 'TRANSFER_IN';
+
+/** Reason of an ADJUSTMENT movement; SOBRANTE = positive correction. */
+export type InventoryAdjustmentReason =
+  | 'MERMA'
+  | 'ROTURA'
+  | 'VENCIMIENTO'
+  | 'DESCUADRE'
+  | 'SOBRANTE';
+
+/** One kardex row: signed quantity + unit cost snapshot at movement time. */
+export interface InventoryMovementEntity {
+  id: string;
+  tenantId: string;
+  branchId: string;
+  itemId: string;
+  /** Populated by list queries (joined Item.name). */
+  itemName?: string;
+  type: InventoryMovementType;
+  quantity: number;
+  reason?: InventoryAdjustmentReason | null;
+  costSnapshot: number;
+  notes?: string | null;
+  userId: string;
+  /** Populated by list queries (joined User → Person name). */
+  userName?: string;
+  /** Sale / purchase order / return id that caused the movement. */
+  refId?: string | null;
+  createdAt: Date;
+}
+
+/** An ADJUSTMENT movement with its audit trail (created entity of the adjustment endpoints). */
+export interface InventoryAdjustmentEntity {
+  id: string;
+  tenantId: string;
+  branchId: string;
+  itemId: string;
+  itemName?: string;
+  type: InventoryMovementType;
+  /** Signed per convention: negative for losses (MERMA/ROTURA/VENCIMIENTO/DESCUADRE), positive for SOBRANTE. */
+  quantity: number;
+  reason: InventoryAdjustmentReason;
+  /** Unit cost at adjustment time (cost snapshot). */
+  cost: number;
+  notes?: string | null;
+  userId: string;
+  userName?: string;
+  createdAt: Date;
+}
+
+/** Merma P&L summary over a window of ADJUSTMENT movements. */
+export interface MermaSummary {
+  /** Σ costSnapshot × |quantity| where quantity < 0 (losses). */
+  mermaCost: number;
+  /** Σ costSnapshot × quantity where quantity > 0 (positive corrections). */
+  sobranteCost: number;
+  /** Number of ADJUSTMENT rows in the window. */
+  count: number;
+}
+
 export interface RecentSale {
   id: string;
   customer: string;
@@ -322,4 +398,10 @@ export interface DailyCloseReport {
   paymentBreakdown: DailyClosePaymentBreakdown[];
   collections: DailyCloseCollection[];
   collectionsTotal: number;
+  /**
+   * Losses from ADJUSTMENT movements inside the same UTC-6 window:
+   * Σ costSnapshot × |quantity| where quantity < 0 (MERMA/ROTURA/VENCIMIENTO/
+   * DESCUADRE). Positive corrections (SOBRANTE) are excluded.
+   */
+  mermaCost: number;
 }

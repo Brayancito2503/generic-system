@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    await requireApiAuth(['CASHIER', 'STAFF', 'TENANT_ADMIN']);
+    const session = await requireApiAuth(['CASHIER', 'STAFF', 'TENANT_ADMIN']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 
@@ -47,6 +47,8 @@ export async function POST(request: NextRequest) {
       notes: parsed.data.notes ?? null,
       paymentMethod: parsed.data.paymentMethod,
       paidAmount: parsed.data.paidAmount,
+      // Operator of the SALE ledger rows.
+      userId: session.userId,
     });
 
     return NextResponse.json(sale, { status: 201 });

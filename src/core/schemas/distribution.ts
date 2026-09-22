@@ -148,6 +148,9 @@ export const updateInventoryItemSchema = z
     description: z.string().trim().max(500).optional(),
     cost: nonNegativeNumber.optional(),
     price: nonNegativeNumber.optional(),
+    // `stock` stays parseable so old clients fail LOUDLY at the route (400
+    // 'El stock solo se ajusta mediante movimientos de inventario') instead of
+    // silently losing the field; the repository double-guards it too.
     stock: z.number().int().nonnegative().optional(),
     minAlert: z.number().int().nonnegative().optional(),
     branchId: idString.optional(),
@@ -192,6 +195,76 @@ export const dailyCloseQuerySchema = z.object({
       const d = new Date(`${v}T00:00:00Z`);
       return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
     }, 'Fecha inválida'),
+});
+
+// ---------------------------------------------------------------------------
+// Inventory ledger (kardex): adjustments, movements and physical count (F0/F1)
+// ---------------------------------------------------------------------------
+
+/** Reasons of a manual adjustment; sign convention enforced server-side. */
+export const inventoryAdjustmentReasonSchema = z.enum([
+  'MERMA',
+  'ROTURA',
+  'VENCIMIENTO',
+  'DESCUADRE',
+  'SOBRANTE',
+]);
+
+/**
+ * Manual adjustment: `quantity` is signed per the ledger convention (negative
+ * for losses, positive for SOBRANTE) and must be nonzero. The repository
+ * cross-checks the sign against `reason` (400) and the resulting stock (409).
+ */
+export const createInventoryAdjustmentSchema = z.object({
+  branchId: idString,
+  itemId: idString,
+  quantity: z.number().finite().refine((v) => v !== 0, 'La cantidad no puede ser cero'),
+  reason: inventoryAdjustmentReasonSchema,
+  notes: z.string().trim().max(500).nullish(),
+});
+
+/** Strict optional YYYY-MM-DD for the ledger date-window filters. */
+const optionalStrictDate = z
+  .string()
+  .trim()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha inválido')
+  .refine((v) => {
+    const d = new Date(`${v}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+  }, 'Fecha inválida')
+  .optional();
+
+/** Ledger list query: tenant-scoped filters (branch/item/type/reason/from/to). */
+export const listMovementsQuerySchema = z.object({
+  branchId: idString.optional(),
+  itemId: idString.optional(),
+  type: z
+    .enum([
+      'INITIAL',
+      'RECEIVE',
+      'SALE',
+      'RETURN',
+      'ADJUSTMENT',
+      'TRANSFER_OUT',
+      'TRANSFER_IN',
+    ])
+    .optional(),
+  reason: inventoryAdjustmentReasonSchema.optional(),
+  from: optionalStrictDate,
+  to: optionalStrictDate,
+});
+
+/** Physical-count batch: countedQuantity ≥ 0 per item (fractions allowed). */
+export const createCountBatchSchema = z.object({
+  branchId: idString,
+  items: z
+    .array(
+      z.object({
+        itemId: idString,
+        countedQuantity: z.number().finite().nonnegative(),
+      })
+    )
+    .min(1),
 });
 
 // ---------------------------------------------------------------------------

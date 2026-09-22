@@ -11,7 +11,7 @@ export async function POST(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
+    const session = await requireApiAuth(['STAFF', 'TENANT_ADMIN']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 
@@ -25,7 +25,11 @@ export async function POST(
 
     // alreadyOrdered (409) propagates untouched through handleApiError; the
     // client maps it to the "OR ya recibida" toast.
-    const order = await repository.receivePurchaseOrder(tenantId, id, parsed.data);
+    const order = await repository.receivePurchaseOrder(tenantId, id, {
+      receivedItems: parsed.data.receivedItems,
+      // Operator of the RECEIVE ledger rows (+ weighted-average cost update).
+      userId: session.userId,
+    });
     return NextResponse.json(order);
   } catch (error) {
     return handleApiError(error);

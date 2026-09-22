@@ -19,7 +19,8 @@ export function isCashier(role: string | null | undefined): boolean {
   return role === 'CASHIER';
 }
 
-/** Accounting profile: reports, cash, receivables, read-only suppliers/POs. */
+/** Accounting profile: reports, cash, receivables, read-only suppliers/POs
+ *  and read-only inventory (list, count ledger, movements). */
 export function isAccountant(role: string | null | undefined): boolean {
   return role === 'ACCOUNTANT';
 }
@@ -42,7 +43,10 @@ export const ALL_TABS = [
 
 const RESTRICTED_TABS: Record<string, readonly string[]> = {
   CASHIER: ['dashboard', 'inventory', 'sales', 'customers', 'receivables'],
-  ACCOUNTANT: ['dashboard', 'receivables', 'cash', 'suppliers', 'reportes'],
+  // Inventory is read-only for accounting (GET list, count, movements); the
+  // create/edit/delete affordances are hidden client-side via the POST and
+  // PATCH/DELETE guard sets.
+  ACCOUNTANT: ['dashboard', 'receivables', 'cash', 'suppliers', 'reportes', 'inventory'],
 };
 
 /** Tabs visible to the given session role; full set while unknown/legacy. */

@@ -56,6 +56,7 @@ const FIXTURE: DailyCloseReport = {
     },
   ],
   collectionsTotal: 120,
+  mermaCost: 0,
 };
 
 function getRequest(query: string): NextRequest {
