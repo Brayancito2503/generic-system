@@ -51,6 +51,7 @@ const ITEM: InventoryStockItem = {
   stock: 14,
   minAlert: 5,
   isLowStock: false,
+  saleUnit: 'LIBRA',
 };
 
 function request(method: 'GET' | 'POST', body?: unknown): NextRequest {
@@ -142,5 +143,43 @@ describe('POST /api/distribution/inventory (create, ACCOUNTANT excluded)', () =>
       'tenant-1',
       expect.objectContaining({ name: 'Proteína 5lb', userId: 'user_1' })
     );
+  });
+
+  it('threads an optional saleUnit (Fase 2 Slice B) into the repository call', async () => {
+    const response = await POST(
+      request('POST', {
+        sku: 'SKU-2',
+        name: 'Arroz Oro',
+        description: '',
+        cost: 30,
+        price: 45,
+        stock: 100,
+        minAlert: 5,
+        saleUnit: 'LIBRA',
+      })
+    );
+
+    expect(response.status).toBe(201);
+    expect(repoMocks.createInventoryItem).toHaveBeenCalledWith(
+      'tenant-1',
+      expect.objectContaining({ saleUnit: 'LIBRA' })
+    );
+  });
+
+  it('rejects an unknown sale unit with 400 before touching the repo', async () => {
+    const response = await POST(
+      request('POST', {
+        sku: 'SKU-3',
+        name: 'Arroz Oro',
+        cost: 30,
+        price: 45,
+        stock: 100,
+        minAlert: 5,
+        saleUnit: 'KILOS',
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(repoMocks.createInventoryItem).not.toHaveBeenCalled();
   });
 });

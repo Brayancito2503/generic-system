@@ -15,6 +15,8 @@ export interface ItemEntity {
   cost: number;
   price: number;
   isService: boolean;
+  /** Sale unit (Fase 2 Slice B); null/UNIDAD = legacy piece-based. */
+  saleUnit?: 'UNIDAD' | 'LIBRA' | 'KILOGRAMO' | null;
   attributes: ItemAttributes;
   createdAt: Date;
 }

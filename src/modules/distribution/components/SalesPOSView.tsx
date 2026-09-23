@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import type { InventoryStockItem, CustomerLight, SaleEntity, TaxRateEntity, PaymentMethod } from '../entities';
 import { apiGet, apiSend } from '../api';
+import { saleUnitSuffix } from '../lib/sale-units';
 import { formatCurrency, formatSecondaryCurrency } from '../utils/currency';
 
 /** Fase 2 Slice A: cart quantities carry up to two decimals (e.g. 2.5 kg). */
@@ -33,6 +34,8 @@ interface CartLine {
   price: number;
   stock: number;
   quantity: number;
+  /** Sale unit for display suffixes (Fase 2 Slice B): lb/kg on weight items. */
+  saleUnit?: InventoryStockItem['saleUnit'];
 }
 
 export function SalesPOSView() {
@@ -119,7 +122,7 @@ export function SalesPOSView() {
           c.itemId === item.id ? { ...c, quantity: c.quantity + 1 } : c
         );
       }
-      return [...prev, { itemId: item.id, name: item.name, sku: item.sku, price: item.price, stock: item.stock, quantity: 1 }];
+      return [...prev, { itemId: item.id, name: item.name, sku: item.sku, price: item.price, stock: item.stock, quantity: 1, saleUnit: item.saleUnit }];
     });
   };
 
@@ -335,7 +338,9 @@ export function SalesPOSView() {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {filtered.map((item) => (
+              {filtered.map((item) => {
+                const unit = saleUnitSuffix(item.saleUnit, t);
+                return (
                 <button
                   key={item.id}
                   type="button"
@@ -351,13 +356,15 @@ export function SalesPOSView() {
                     <Package className="w-4 h-4 text-muted-foreground shrink-0" />
                   </div>
                   <div className="mt-2 flex items-center justify-between">
-                    <span className="text-base font-bold text-emerald-600 dark:text-emerald-400">{fmt(item.price)}</span>
+                    {/* Weight items show the sale-unit price ("C$ 45.00 / lb"). */}
+                    <span className="text-base font-bold text-emerald-600 dark:text-emerald-400">{fmt(item.price)}{unit ? ` / ${unit}` : ''}</span>
                     <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${item.isLowStock ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' : 'bg-muted text-muted-foreground'}`}>
-                      {t('sales.stock', { count: item.stock })}
+                      {t('sales.stock', { count: item.stock })}{unit ? ` ${unit}` : ''}
                     </span>
                   </div>
                 </button>
-              ))}
+                );
+              })}
               {filtered.length === 0 && (
                 <p className="col-span-full text-center py-10 text-muted-foreground text-sm">{t('sales.noResults')}</p>
               )}
@@ -380,11 +387,13 @@ export function SalesPOSView() {
             </div>
           ) : (
             <div className="divide-y divide-border max-h-72 overflow-y-auto">
-              {cart.map((c) => (
+              {cart.map((c) => {
+                    const unit = saleUnitSuffix(c.saleUnit, t);
+                    return (
                 <div key={c.itemId} className="flex items-center gap-3 py-2.5">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-foreground font-medium truncate">{c.name}</p>
-                    <p className="text-xs text-muted-foreground">{fmt(c.price)} × {c.quantity} = <span className="text-foreground font-semibold">{fmt(c.price * c.quantity)}</span></p>
+                    <p className="text-xs text-muted-foreground">{fmt(c.price)} × {c.quantity}{unit ? ` ${unit}` : ''} = <span className="text-foreground font-semibold">{fmt(c.price * c.quantity)}</span></p>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <button type="button" onClick={() => changeQty(c.itemId, -1)} className="p-1 rounded-md bg-muted hover:bg-accent text-foreground"><Minus className="w-3 h-3" /></button>
@@ -409,7 +418,8 @@ export function SalesPOSView() {
                   </div>
                   <button type="button" onClick={() => removeLine(c.itemId)} className="p-1 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive"><Trash2 className="w-3.5 h-3.5" /></button>
                 </div>
-              ))}
+                    );
+                  })}
             </div>
           )}
 

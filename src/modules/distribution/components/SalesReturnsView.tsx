@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import type { PaginatedResult, SaleEntity, SaleReturnEntity } from '../entities';
 import { apiGet, apiSend } from '../api';
+import { saleUnitSuffix } from '../lib/sale-units';
 import { formatCurrency } from '../utils/currency';
 
 const PAGE_SIZE = 20;
@@ -297,14 +298,17 @@ export function SalesReturnsView() {
                         <tr>
                           <td colSpan={5} className="px-6 pb-4 pt-1 bg-muted/20 border-t border-border">
                             <div className="space-y-1.5 pt-2">
-                              {r.items.map((line) => (
+                              {r.items.map((line) => {
+                                const unit = saleUnitSuffix(line.saleUnit, t);
+                                return (
                                 <div key={line.id} className="flex justify-between text-sm text-muted-foreground">
                                   <span>
-                                    {line.itemName} <span className="text-muted-foreground/70">× {line.quantity}</span>
+                                    {line.itemName} <span className="text-muted-foreground/70">× {line.quantity}{unit ? ` ${unit}` : ''}</span>
                                   </span>
                                   <span className="font-mono text-foreground">- {fmt(line.refundAmount)}</span>
                                 </div>
-                              ))}
+                                );
+                              })}
                               <p className="text-xs text-muted-foreground pt-1 border-t border-border">
                                 {t('returns.refundTotal')}:{' '}
                                 <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
@@ -441,12 +445,13 @@ export function SalesReturnsView() {
               </p>
               {saleForReturn.items.map((line) => {
                 const exceeds = lineExceedsSold(line.itemId);
+                const unit = saleUnitSuffix(line.saleUnit, t);
                 return (
                   <div key={line.id} className="flex items-center justify-between gap-3 bg-muted/30 border border-border rounded-lg px-3 py-2">
                     <div className="min-w-0 flex-1">
                       <p className="text-sm text-foreground truncate">{line.itemName}</p>
                       <p className="text-xs text-muted-foreground">
-                        {t('returns.soldQty')}: {line.quantity} · {fmt(line.price)} c/u
+                        {t('returns.soldQty')}: {line.quantity}{unit ? ` ${unit}` : ''} · {fmt(line.price)}{unit ? ` /${unit}` : ' c/u'}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">

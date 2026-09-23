@@ -16,6 +16,7 @@ import type {
   InventoryMovementEntity,
   InventoryMovementType,
   InventoryStockItem,
+  ItemSaleUnit,
   MermaSummary,
   PaginatedResult,
   PaymentMethod,
@@ -36,6 +37,11 @@ export interface CreateInventoryItemInput {
   price: number;
   stock: number;
   minAlert: number;
+  /**
+   * Sale unit (Fase 2 Slice B): null/UNIDAD = legacy piece-based. Weight items
+   * keep stock, cost and price expressed in the sale unit (no conversion).
+   */
+  saleUnit?: ItemSaleUnit | null;
   /** Session user that created the item (writes the INITIAL ledger row). */
   userId: string;
 }
@@ -46,6 +52,8 @@ export interface UpdateInventoryItemInput {
   description?: string;
   cost?: number;
   price?: number;
+  /** Sale unit (Fase 2 Slice B); undefined = untouched. */
+  saleUnit?: ItemSaleUnit | null;
   /**
    * Direct stock writes are REMOVED (Fase 0): the repository rejects any
    * provided `stock` with 400 — stock changes only through ledger movements

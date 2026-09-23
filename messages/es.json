@@ -205,6 +205,11 @@
             "invalidForm": "Nombre y apellido son obligatorios.",
             "closeError": "Cerrar"
         },
+        "saleUnits": {
+            "UNIDAD": "Unidad",
+            "LIBRA": "lb",
+            "KILOGRAMO": "kg"
+        },
         "inventory": {
             "title": "Gestión de Inventario & Catálogo",
             "subtitle": "Control centralizado de productos, existencias y precios",
@@ -241,6 +246,9 @@
             "fieldPrice": "Precio Venta (C$) *",
             "fieldStock": "Stock Actual",
             "fieldMinAlert": "Stock Mínimo",
+            "saleUnit": "Unidad de Venta",
+            "pricePerUnit": "Precio por {unit} *",
+            "stockInSaleUnit": "El stock, el precio y el kardex se expresan en {unit}. Ej.: una bolsa de 100 {unit} se registra como 100.",
             "placeholderSku": "ACE-001",
             "placeholderName": "Aceite Corona 1L",
             "placeholderDescription": "Caja x 24 unidades",

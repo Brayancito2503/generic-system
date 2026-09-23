@@ -88,9 +88,9 @@ function userRoleForAccessRole(accessRole: AccessRole | null | undefined) {
 /** Employee row with its Person graph, shared by the entity mapper methods. */
 type EmployeeWithPerson = Prisma.EmployeeGetPayload<{ include: { person: true } }>;
 
-/** Movement row with its Item name (the operator name is joined separately). */
+/** Movement row with its Item name + sale unit (the operator name is joined separately). */
 type MovementWithGraph = Prisma.InventoryMovementGetPayload<{
-  include: { item: { select: { name: true } } };
+  include: { item: { select: { name: true; saleUnit: true } } };
 }>;
 
 /** Signed movement params shared by every stock mutation (the ledger backbone). */
@@ -174,6 +174,19 @@ function itemUom(attributes: Prisma.JsonValue): string | null {
   }
   const uom = (attributes as Record<string, unknown>).uom;
   return typeof uom === 'string' && uom.trim() !== '' ? uom : null;
+}
+
+/**
+ * Display label for the per-sale unit on the server side (Fase 2 Slice B).
+ * UNIDAD/null → null (legacy piece-based items keep their `attributes.uom`).
+ * Weight units map to language-neutral literals so daily-close uom columns
+ * read "lb"/"kg" regardless of UI locale; only UNIDAD can never be shown
+ * incorrectly as a quantity suffix.
+ */
+function saleUnitLabelOf(saleUnit: 'UNIDAD' | 'LIBRA' | 'KILOGRAMO' | null | undefined): string | null {
+  if (saleUnit === 'LIBRA') return 'lb';
+  if (saleUnit === 'KILOGRAMO') return 'kg';
+  return null;
 }
 
 /**
@@ -454,6 +467,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       stock: row.stock.toNumber(),
       minAlert: row.minAlert,
       isLowStock: row.stock.toNumber() < row.minAlert,
+      saleUnit: row.item.saleUnit ?? null,
     }));
   }
 
@@ -487,6 +501,8 @@ export class PrismaDistributionRepository implements IDistributionRepository {
           cost: input.cost,
           price: input.price,
           isService: false,
+          // Optional sale unit; omitted → legacy piece-based (null).
+          saleUnit: input.saleUnit ?? null,
           attributes: {},
         },
       });
@@ -526,6 +542,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       stock: inv.stock.toNumber(),
       minAlert: inv.minAlert,
       isLowStock: inv.stock.toNumber() < inv.minAlert,
+      saleUnit: item.saleUnit ?? null,
     };
   }
 
@@ -558,12 +575,15 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       description?: string | null;
       cost?: number;
       price?: number;
+      saleUnit?: 'UNIDAD' | 'LIBRA' | 'KILOGRAMO' | null;
     } = {};
     if (input.sku !== undefined) itemData.sku = input.sku || null;
     if (input.name !== undefined) itemData.name = input.name;
     if (input.description !== undefined) itemData.description = input.description || null;
     if (input.cost !== undefined) itemData.cost = input.cost;
     if (input.price !== undefined) itemData.price = input.price;
+    // undefined = untouched; null = back to legacy piece-based units.
+    if (input.saleUnit !== undefined) itemData.saleUnit = input.saleUnit;
 
     if (itemData.sku && itemData.sku !== existing.sku) {
       const skuConflict = await prisma.item.findFirst({
@@ -624,6 +644,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       stock,
       minAlert,
       isLowStock: stock < minAlert,
+      saleUnit: item.saleUnit ?? null,
     };
   }
 
@@ -2087,6 +2108,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         itemName: si.item.name,
         quantity: si.quantity.toNumber(),
         price: si.price.toNumber(),
+        saleUnit: si.item.saleUnit ?? null,
       })),
     };
   }
@@ -2105,7 +2127,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         take: limit,
         include: {
           person: { select: { firstName: true, lastName: true } },
-          items: { include: { item: { select: { name: true } } } },
+          items: { include: { item: { select: { name: true, saleUnit: true } } } },
         },
       }),
       prisma.sale.count({ where: { tenantId } }),
@@ -2137,6 +2159,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
           itemName: si.item.name,
           quantity: si.quantity.toNumber(),
           price: si.price.toNumber(),
+          saleUnit: si.item.saleUnit ?? null,
         })),
       })),
       page,
@@ -2160,7 +2183,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         take: limit,
         include: {
           sale: { select: { invoiceNumber: true } },
-          items: { include: { item: { select: { name: true } } } },
+          items: { include: { item: { select: { name: true, saleUnit: true } } } },
         },
       }),
       prisma.saleReturn.count({ where: { tenantId } }),
@@ -2183,6 +2206,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
           itemName: si.item.name,
           quantity: si.quantity.toNumber(),
           refundAmount: si.refundAmount.toNumber(),
+          saleUnit: si.item.saleUnit ?? null,
         })),
       })),
       page,
@@ -2337,7 +2361,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
           },
         },
         include: {
-          items: { include: { item: { select: { name: true } } } },
+          items: { include: { item: { select: { name: true, saleUnit: true } } } },
         },
       });
 
@@ -2378,6 +2402,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
           itemName: si.item.name,
           quantity: si.quantity.toNumber(),
           refundAmount: si.refundAmount.toNumber(),
+          saleUnit: si.item.saleUnit ?? null,
         })),
       };
     });
@@ -2568,7 +2593,10 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         const line =
           linesById.get(si.itemId) ?? {
             itemName: si.item.name,
-            uom: itemUom(si.item.attributes),
+            // Prefer the item's sale unit (lb/kg) over the legacy
+            // attributes.uom: a 'SACO' attribute would mislabel quantities
+            // that are actually expressed in pounds (Fase 2 Slice B).
+            uom: saleUnitLabelOf(si.item.saleUnit) ?? itemUom(si.item.attributes),
             quantity: 0,
             lineCost: 0,
             lineRevenue: 0,
@@ -2661,6 +2689,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       quantity: m.quantity.toNumber(),
       reason: m.reason as InventoryAdjustmentReason | null,
       costSnapshot: m.costSnapshot.toNumber(),
+      saleUnit: m.item.saleUnit ?? null,
       notes: m.notes,
       userId: m.userId,
       userName,
@@ -2851,7 +2880,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     const rows = await prisma.inventoryMovement.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      include: { item: { select: { name: true } } },
+      include: { item: { select: { name: true, saleUnit: true } } },
     });
 
     // InventoryMovement has no FK to User (audit-only id), so the operator

@@ -13,6 +13,14 @@ export type ReceivableStatus = 'OPEN' | 'PARTIAL' | 'PAID';
  */
 export type AccessRole = 'CASHIER' | 'ACCOUNTANT' | 'MANAGER';
 
+/**
+ * Per-sale unit of an item (Fase 2 Slice B): weight items (rice, beans) are
+ * stocked, priced AND ledgered in their sale unit. `null`/UNIDAD = legacy
+ * piece-based behavior. No conversion factor: total is qty × price in the
+ * same unit, so Decimal math stays exact.
+ */
+export type ItemSaleUnit = 'UNIDAD' | 'LIBRA' | 'KILOGRAMO';
+
 export interface SupplierEntity {
   id: string;
   tenantId: string;
@@ -136,6 +144,8 @@ export interface SaleLineEntity {
   itemName: string;
   quantity: number;
   price: number;
+  /** Display suffix for weight items (lb/kg); UNIDAD/null = no suffix. */
+  saleUnit?: ItemSaleUnit | null;
 }
 
 export interface SaleEntity {
@@ -187,6 +197,8 @@ export interface SaleReturnItemEntity {
   itemName: string;
   quantity: number;
   refundAmount: number;
+  /** Display suffix for weight items (lb/kg); UNIDAD/null = no suffix. */
+  saleUnit?: ItemSaleUnit | null;
 }
 
 export interface SaleReturnEntity {
@@ -221,6 +233,8 @@ export interface InventoryStockItem {
   stock: number;
   minAlert: number;
   isLowStock: boolean;
+  /** Sale unit (Fase 2 Slice B); null/UNIDAD = legacy piece-based. */
+  saleUnit?: ItemSaleUnit | null;
 }
 
 // ─── Inventory ledger (kardex) ───────────────────────────────────────────────
@@ -261,6 +275,8 @@ export interface InventoryMovementEntity {
   quantity: number;
   reason?: InventoryAdjustmentReason | null;
   costSnapshot: number;
+  /** Sale unit of the moved item (Fase 2 Slice B); null/UNIDAD = no suffix. */
+  saleUnit?: ItemSaleUnit | null;
   notes?: string | null;
   userId: string;
   /** Populated by list queries (joined User → Person name). */

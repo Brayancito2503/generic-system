@@ -61,6 +61,16 @@ enum InventoryAdjustmentReason {
   SOBRANTE
 }
 
+// Per-sale unit of an item (Fase 2 Slice B): weight items (rice, beans) are
+// stocked, priced AND ledgered in their sale unit. `null` / UNIDAD on Item =
+// legacy behavior (one piece = one unit). No conversion factor: total is
+// always qty × price in the SAME unit, so Decimal math stays exact.
+enum ItemSaleUnit {
+  UNIDAD
+  LIBRA
+  KILOGRAMO
+}
+
 model Tenant {
   id        String   @id @default(uuid())
   slug      String   @unique
@@ -156,6 +166,9 @@ model Item {
   cost        Decimal  @db.Decimal(10, 2)
   price       Decimal  @db.Decimal(10, 2)
   isService   Boolean  @default(false)
+  // Sale unit: null = legacy piece-based. Weight items (LIBRA/KILOGRAMO) keep
+  // stock, cost and price expressed in that unit (Option (i), no conversion).
+  saleUnit    ItemSaleUnit?
   attributes  Json     @default("{}")
   createdAt   DateTime @default(now())
 

@@ -44,6 +44,8 @@ export async function PATCH(
         : {}),
       ...(parsed.data.cost !== undefined ? { cost: parsed.data.cost } : {}),
       ...(parsed.data.price !== undefined ? { price: parsed.data.price } : {}),
+      // PATCH: undefined = untouched, null = back to legacy piece-based units.
+      ...(parsed.data.saleUnit !== undefined ? { saleUnit: parsed.data.saleUnit } : {}),
       ...(parsed.data.minAlert !== undefined ? { minAlert: parsed.data.minAlert } : {}),
       ...(parsed.data.branchId !== undefined ? { branchId: parsed.data.branchId } : {}),
     });

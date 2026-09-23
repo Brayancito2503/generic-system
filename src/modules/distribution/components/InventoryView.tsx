@@ -7,6 +7,7 @@ import { Package, Search, Plus, AlertTriangle, TrendingUp, TrendingDown, Edit2, 
 import type { InventoryStockItem, PurchaseOrderEntity, CashSessionEntity } from '../entities';
 import { apiGet, apiSend } from '../api';
 import { isCashier, isAccountant, hasFullAccess } from '../lib/roles';
+import { saleUnitSuffix } from '../lib/sale-units';
 import { formatCurrency } from '../utils/currency';
 import { InventoryCountView } from './InventoryCountView';
 import { InventoryMovementsView } from './InventoryMovementsView';
@@ -14,9 +15,10 @@ import { InventoryMovementsView } from './InventoryMovementsView';
 interface ProductFormData {
   sku: string; name: string; description: string;
   cost: string; price: string; stock: string; minAlert: string;
+  saleUnit: string;
 }
 
-const emptyForm: ProductFormData = { sku: '', name: '', description: '', cost: '', price: '', stock: '', minAlert: '5' };
+const emptyForm: ProductFormData = { sku: '', name: '', description: '', cost: '', price: '', stock: '', minAlert: '5', saleUnit: 'UNIDAD' };
 
 type InventoryTab = 'list' | 'count' | 'movements';
 
@@ -122,11 +124,13 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
 
   const handleSave = () => {
     if (!form.name || !form.price || !form.cost) return;
-    const stock = parseInt(form.stock) || 0;
+    // parseFloat: fractional opening stock (Fase 2) — parseInt truncated 2.5 → 2.
+    const stock = parseFloat(form.stock) || 0;
     const minAlert = parseInt(form.minAlert) || 5;
     const catalog = {
       sku: form.sku, name: form.name, description: form.description,
       cost: parseFloat(form.cost), price: parseFloat(form.price),
+      saleUnit: form.saleUnit as InventoryStockItem['saleUnit'],
     };
     if (editId) {
       const target = items.find((i) => i.id === editId);
@@ -150,7 +154,7 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
   };
 
   const handleEdit = (item: InventoryStockItem) => {
-    setForm({ sku: item.sku || '', name: item.name, description: item.description || '', cost: item.cost.toString(), price: item.price.toString(), stock: item.stock.toString(), minAlert: item.minAlert.toString() });
+    setForm({ sku: item.sku || '', name: item.name, description: item.description || '', cost: item.cost.toString(), price: item.price.toString(), stock: item.stock.toString(), minAlert: item.minAlert.toString(), saleUnit: item.saleUnit ?? 'UNIDAD' });
     setFormError(null);
     setEditId(item.id); setShowForm(true);
   };
@@ -280,6 +284,7 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
               <tbody className="divide-y divide-border">
                 {filtered.map(item => {
                   const margin = ((item.price - item.cost) / item.price * 100).toFixed(1);
+                  const unit = saleUnitSuffix(item.saleUnit, t);
                   return (
                     <tr key={item.id} className={`hover:bg-accent/40 transition-colors ${item.isLowStock ? 'bg-amber-500/5' : ''}`}>
                       <td className="px-4 py-3 text-muted-foreground font-mono text-xs">{item.sku}</td>
@@ -290,7 +295,9 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
                       <td className="px-4 py-3 text-right text-muted-foreground font-mono text-xs">{fmt(item.cost)}</td>
                       <td className="px-4 py-3 text-right text-foreground font-semibold font-mono text-xs">{fmt(item.price)}</td>
                       <td className="px-4 py-3 text-right text-emerald-600 dark:text-emerald-400 font-mono text-xs">{margin}%</td>
-                      <td className="px-4 py-3 text-center font-bold text-foreground">{item.stock}</td>
+                      <td className="px-4 py-3 text-center font-bold text-foreground">
+                        {item.stock}{unit ? ` ${unit}` : ''}
+                      </td>
                       <td className="px-4 py-3 text-center text-muted-foreground">{item.minAlert}</td>
                       <td className="px-4 py-3 text-center">
                         <span className={`text-xs font-semibold px-2 py-1 rounded-full ${item.isLowStock ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'}`}>
@@ -348,7 +355,11 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
                 { labelKey: 'fieldMinAlert', placeholderKey: 'placeholderMinAlert', key: 'minAlert', full: false },
               ].map(f => (
                 <div key={f.key} className={f.full ? 'col-span-2' : 'col-span-1'}>
-                  <label className="block text-xs text-muted-foreground mb-1">{t(`inventory.${f.labelKey}`)}</label>
+                  <label className="block text-xs text-muted-foreground mb-1">
+                    {f.key === 'price' && form.saleUnit !== 'UNIDAD'
+                      ? t('inventory.pricePerUnit', { unit: t(`saleUnits.${form.saleUnit}`) })
+                      : t(`inventory.${f.labelKey}`)}
+                  </label>
                   <input
                     value={(form as unknown as Record<string, string>)[f.key]}
                     onChange={e => setForm(prev => ({ ...prev, [f.key]: e.target.value }))}
@@ -357,6 +368,26 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
                   />
                 </div>
               ))}
+              {/* Per-sale unit (Fase 2 Slice B): weight items are stocked, priced
+                  and ledgered in their sale unit — no conversion factor. */}
+              <div className="col-span-2">
+                <label className="block text-xs text-muted-foreground mb-1">{t('inventory.saleUnit')}</label>
+                <select
+                  value={form.saleUnit}
+                  onChange={e => setForm(prev => ({ ...prev, saleUnit: e.target.value }))}
+                  className="w-full bg-background border border-border rounded-lg px-3 py-2.5 text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                >
+                  {(['UNIDAD', 'LIBRA', 'KILOGRAMO'] as const).map((u) => (
+                    <option key={u} value={u}>{t(`saleUnits.${u}`)}</option>
+                  ))}
+                </select>
+              </div>
+              {form.saleUnit !== 'UNIDAD' && (
+                <div className="col-span-2 flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 border border-border rounded-lg px-3 py-2">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  {t('inventory.stockInSaleUnit', { unit: t(`saleUnits.${form.saleUnit}`) })}
+                </div>
+              )}
             </div>
             {editId && (
               <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 border border-border rounded-lg px-3 py-2">

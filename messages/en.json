@@ -205,6 +205,11 @@
             "invalidForm": "First and last name are required.",
             "closeError": "Close"
         },
+        "saleUnits": {
+            "UNIDAD": "Unit",
+            "LIBRA": "lb",
+            "KILOGRAMO": "kg"
+        },
         "inventory": {
             "title": "Inventory & Catalog Management",
             "subtitle": "Centralized control of products, stock levels, and prices",
@@ -241,6 +246,9 @@
             "fieldPrice": "Selling Price (C$) *",
             "fieldStock": "Current Stock",
             "fieldMinAlert": "Min. Stock",
+            "saleUnit": "Sale Unit",
+            "pricePerUnit": "Price per {unit} *",
+            "stockInSaleUnit": "Stock, price and the kardex ledger are expressed in {unit}. E.g. a 100-{unit} bag is registered as 100.",
             "placeholderSku": "ACE-001",
             "placeholderName": "Corona Oil 1L",
             "placeholderDescription": "Box of 24 units",

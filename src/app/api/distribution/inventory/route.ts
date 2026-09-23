@@ -48,6 +48,8 @@ export async function POST(request: NextRequest) {
       price: parsed.data.price,
       stock: parsed.data.stock,
       minAlert: parsed.data.minAlert,
+      // Optional sale unit (Fase 2 Slice B); omitted → legacy piece-based.
+      saleUnit: parsed.data.saleUnit,
       // Ledger origin: the operator of the INITIAL movement.
       userId: session.userId,
     });

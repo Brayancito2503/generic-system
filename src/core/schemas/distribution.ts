@@ -148,6 +148,9 @@ export const updateSupplierSchema = z
 // Inventory ops (branchId-scoped updates + negative-value guards)
 // ---------------------------------------------------------------------------
 
+/** Per-sale unit (Fase 2 Slice B); UNIDAD = legacy piece-based. */
+export const itemSaleUnitSchema = z.enum(['UNIDAD', 'LIBRA', 'KILOGRAMO']);
+
 export const createInventoryItemSchema = z.object({
   sku: z.string().trim().max(60).optional(),
   name: z.string().trim().min(1).max(200),
@@ -159,6 +162,8 @@ export const createInventoryItemSchema = z.object({
   stock: quantity2dpNonNegative.default(0),
   // minAlert stays an integer threshold (the DB column is Int).
   minAlert: z.number().int().nonnegative().default(5),
+  // Optional: omitted = legacy piece-based item (saleUnit null in DB).
+  saleUnit: itemSaleUnitSchema.optional(),
 });
 
 export const updateInventoryItemSchema = z
@@ -168,6 +173,8 @@ export const updateInventoryItemSchema = z
     description: z.string().trim().max(500).optional(),
     cost: nonNegativeNumber.optional(),
     price: nonNegativeNumber.optional(),
+    // Optional PATCH: undefined = untouched, null = back to legacy units.
+    saleUnit: itemSaleUnitSchema.nullable().optional(),
     // `stock` stays parseable so old clients fail LOUDLY at the route (400
     // 'El stock solo se ajusta mediante movimientos de inventario') instead of
     // silently losing the field; the repository double-guards it too.

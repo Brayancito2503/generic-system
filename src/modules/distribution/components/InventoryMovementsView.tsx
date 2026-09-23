@@ -19,6 +19,7 @@ import type {
   InventoryStockItem,
 } from '../entities';
 import { apiGet, apiSend } from '../api';
+import { saleUnitSuffix } from '../lib/sale-units';
 import { formatCurrency } from '../utils/currency';
 
 const TYPE_LABEL_KEYS: Record<InventoryMovementType, string> = {
@@ -67,7 +68,7 @@ const fmtDateTime = (iso: string) =>
   });
 
 /** Signed quantity chip: green for ins/corrections, red for outs/losses. */
-function QtyCell({ quantity }: { quantity: number }) {
+function QtyCell({ quantity, suffix }: { quantity: number; suffix?: string | null }) {
   const negative = quantity < 0;
   return (
     <span
@@ -79,6 +80,7 @@ function QtyCell({ quantity }: { quantity: number }) {
     >
       {negative ? '' : '+'}
       {quantity}
+      {suffix ? ` ${suffix}` : ''}
     </span>
   );
 }
@@ -270,7 +272,9 @@ export function InventoryMovementsView({ branchId }: { branchId?: string }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {movements.map((m) => (
+                {movements.map((m) => {
+                  const unit = saleUnitSuffix(m.saleUnit, t);
+                  return (
                   <tr key={m.id} className="hover:bg-accent/40 transition-colors">
                     <td className="px-4 py-3 text-muted-foreground text-xs whitespace-nowrap">
                       {fmtDateTime(m.createdAt.toISOString?.() ?? String(m.createdAt))}
@@ -293,7 +297,7 @@ export function InventoryMovementsView({ branchId }: { branchId?: string }) {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <QtyCell quantity={m.quantity} />
+                      <QtyCell quantity={m.quantity} suffix={unit} />
                     </td>
                     <td className="px-4 py-3 text-right text-muted-foreground font-mono text-xs">
                       {fmt(m.costSnapshot)}
@@ -305,7 +309,8 @@ export function InventoryMovementsView({ branchId }: { branchId?: string }) {
                       {m.notes ?? '—'}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
             {movements.length === 0 && (
