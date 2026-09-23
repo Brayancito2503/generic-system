@@ -13,6 +13,11 @@ import { isAccountant } from '../lib/roles';
 
 const fmtLps = (n: number) => `C$ ${n.toLocaleString('es-NI', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+/** Fase 2 Slice A: quantities carry up to two decimals (e.g. 10.5 kg). */
+const round2 = (n: number) => Math.round(n * 100) / 100;
+/** Parses a quantity input as a cents-exact number (NaN → NaN). */
+const parseQty = (raw: string) => round2(parseFloat(raw));
+
 interface OrderLine {
   itemId: string;
   itemName: string;
@@ -163,7 +168,7 @@ export default function SuppliersView({ userRole }: { userRole?: string | null }
 
   const handleAddOrderLine = () => {
     const item = inventory.find((i) => i.id === pickerItemId);
-    const qty = parseInt(pickerQty, 10);
+    const qty = parseQty(pickerQty);
     if (!item) {
       setError(t('suppliers.needsItem'));
       return;
@@ -177,7 +182,7 @@ export default function SuppliersView({ userRole }: { userRole?: string | null }
       const existing = prev.find((l) => l.itemId === item.id);
       if (existing) {
         return prev.map((l) =>
-          l.itemId === item.id ? { ...l, quantity: String(Number(l.quantity) + qty) } : l
+          l.itemId === item.id ? { ...l, quantity: String(round2(Number(l.quantity) + qty)) } : l
         );
       }
       return [...prev, { itemId: item.id, itemName: item.name, quantity: String(qty) }];
@@ -197,8 +202,8 @@ export default function SuppliersView({ userRole }: { userRole?: string | null }
       return;
     }
     const items = orderLines
-      .map((l) => ({ itemId: l.itemId, quantity: parseInt(l.quantity, 10) }))
-      .filter((l) => !Number.isNaN(l.quantity) && l.quantity > 0);
+      .map((l) => ({ itemId: l.itemId, quantity: parseQty(l.quantity) }))
+      .filter((l) => Number.isFinite(l.quantity) && l.quantity > 0);
     if (items.length === 0) {
       setError(t('suppliers.invalidQty'));
       return;
@@ -234,7 +239,7 @@ export default function SuppliersView({ userRole }: { userRole?: string | null }
 
   const handleAddReceiveLine = () => {
     const item = inventory.find((i) => i.id === receivePickerItemId);
-    const qty = parseInt(receivePickerQty, 10);
+    const qty = parseQty(receivePickerQty);
     if (!item) {
       setError(t('suppliers.needsItem'));
       return;
@@ -253,8 +258,8 @@ export default function SuppliersView({ userRole }: { userRole?: string | null }
     e.preventDefault();
     if (!receiveFor) return;
     const receivedItems = receiveLines
-      .map((l) => ({ itemId: l.itemId, quantity: parseInt(l.quantity, 10) }))
-      .filter((l) => !Number.isNaN(l.quantity) && l.quantity > 0);
+      .map((l) => ({ itemId: l.itemId, quantity: parseQty(l.quantity) }))
+      .filter((l) => Number.isFinite(l.quantity) && l.quantity > 0);
     if (receivedItems.length === 0) {
       setError(t('suppliers.invalidQty'));
       return;
@@ -664,8 +669,8 @@ export default function SuppliersView({ userRole }: { userRole?: string | null }
                 </select>
                 <input
                   type="number"
-                  min="1"
-                  step="1"
+                  min="0.01"
+                  step="0.01"
                   value={pickerQty}
                   onChange={(e) => setPickerQty(e.target.value)}
                   placeholder="1"
@@ -768,7 +773,7 @@ export default function SuppliersView({ userRole }: { userRole?: string | null }
                       <input
                         type="number"
                         min="0"
-                        step="1"
+                        step="0.01"
                         value={line.quantity}
                         onChange={(e) =>
                           setReceiveLines((prev) => prev.map((l, i) => (i === idx ? { ...l, quantity: e.target.value } : l)))
@@ -800,8 +805,8 @@ export default function SuppliersView({ userRole }: { userRole?: string | null }
                 </select>
                 <input
                   type="number"
-                  min="1"
-                  step="1"
+                  min="0.01"
+                  step="0.01"
                   value={receivePickerQty}
                   onChange={(e) => setReceivePickerQty(e.target.value)}
                   placeholder="1"

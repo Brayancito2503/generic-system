@@ -1,0 +1,10 @@
+-- AlterTable
+ALTER TABLE "PurchaseOrderItem" ALTER COLUMN "quantity" SET DATA TYPE DECIMAL(10,2),
+ALTER COLUMN "receivedQty" SET DEFAULT 0,
+ALTER COLUMN "receivedQty" SET DATA TYPE DECIMAL(10,2);
+
+-- AlterTable
+ALTER TABLE "SaleItem" ALTER COLUMN "quantity" SET DATA TYPE DECIMAL(10,2);
+
+-- AlterTable
+ALTER TABLE "SaleReturnItem" ALTER COLUMN "quantity" SET DATA TYPE DECIMAL(10,2);

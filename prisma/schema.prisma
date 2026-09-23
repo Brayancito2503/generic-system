@@ -249,7 +249,8 @@ model SaleItem {
   sale     Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
   itemId   String
   item     Item    @relation(fields: [itemId], references: [id])
-  quantity Int
+  // Fractional units allowed (Fase 2 Slice A): e.g. 2.5 kg sold.
+  quantity Decimal @db.Decimal(10, 2)
   price    Decimal @db.Decimal(10, 2)
   // Cost snapshot at sale time: margins (daily close report) stay accurate
   // even when the Item.cost is later updated.
@@ -343,8 +344,9 @@ model PurchaseOrderItem {
   order      PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
   itemId     String
   item       Item          @relation(fields: [itemId], references: [id])
-  quantity   Int
-  receivedQty Int          @default(0) // avance de recepción; remaining = quantity - receivedQty
+  // Fractional units allowed (Fase 2 Slice A): e.g. 10.5 kg ordered.
+  quantity   Decimal       @db.Decimal(10, 2)
+  receivedQty Decimal      @db.Decimal(10, 2) @default(0) // avance de recepción; remaining = quantity - receivedQty
   cost       Decimal       @db.Decimal(10, 2)
 }
 
@@ -491,7 +493,8 @@ model SaleReturnItem {
   return      SaleReturn  @relation(fields: [returnId], references: [id], onDelete: Cascade)
   itemId      String
   item        Item        @relation(fields: [itemId], references: [id])
-  quantity    Int
+  // Fractional units allowed (Fase 2 Slice A), matching the sold quantity.
+  quantity    Decimal     @db.Decimal(10, 2)
   refundAmount Decimal    @db.Decimal(10, 2)
 
   @@index([returnId])

@@ -2,7 +2,9 @@ import { prisma } from '../prisma';
 import { ApiError } from '@/lib/api-error';
 import { hashPassword } from '@/lib/security';
 import { randomUUID } from 'node:crypto';
-import type { Prisma } from '@prisma/client';
+// Value import: `Prisma.Decimal` is needed at runtime for exact fractional
+// math (Fase 2 Slice A); `Prisma` types are also used throughout this file.
+import { Prisma } from '@prisma/client';
 import type {
   IDistributionRepository,
   CreateInventoryItemInput,
@@ -334,14 +336,19 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       where: { sale: { tenantId, createdAt: { gte: startOfMonth } } },
       select: { itemId: true, quantity: true, price: true },
     });
-    const revenueByItem = new Map<string, number>();
+    const revenueByItem = new Map<string, Prisma.Decimal>();
     const soldByItem = new Map<string, number>();
     for (const si of saleItems) {
       revenueByItem.set(
         si.itemId,
-        (revenueByItem.get(si.itemId) ?? 0) + si.price.toNumber() * si.quantity
+        (revenueByItem.get(si.itemId) ?? new Prisma.Decimal(0)).plus(
+          si.price.times(si.quantity)
+        )
       );
-      soldByItem.set(si.itemId, (soldByItem.get(si.itemId) ?? 0) + si.quantity);
+      soldByItem.set(
+        si.itemId,
+        (soldByItem.get(si.itemId) ?? 0) + si.quantity.toNumber()
+      );
     }
     const ranked = [...revenueByItem.entries()]
       .map(([itemId, revenue]) => ({
@@ -349,7 +356,10 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         revenue,
         sold: soldByItem.get(itemId) ?? 0,
       }))
-      .sort((a, b) => b.revenue - a.revenue || b.sold - a.sold)
+      .sort(
+        (a, b) =>
+          b.revenue.comparedTo(a.revenue) || b.sold - a.sold
+      )
       .slice(0, 5);
 
     const topItems = await prisma.item.findMany({
@@ -361,7 +371,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       return {
         name: item?.name ?? 'Producto eliminado',
         sold: r.sold,
-        revenue: Math.round(r.revenue * 100) / 100,
+        revenue: r.revenue.toDecimalPlaces(2).toNumber(),
       };
     });
 
@@ -791,12 +801,12 @@ export class PrismaDistributionRepository implements IDistributionRepository {
 
     const mergedLines = new Map<string, number>();
     for (const line of input.receivedItems) {
-      if (line.quantity <= 0 || !Number.isInteger(line.quantity)) {
+      if (line.quantity <= 0) {
         throw new ApiError(400, 'Cantidad inválida en la recepción');
       }
       mergedLines.set(
         line.itemId,
-        (mergedLines.get(line.itemId) ?? 0) + line.quantity
+        round2((mergedLines.get(line.itemId) ?? 0) + line.quantity)
       );
     }
     const lines = [...mergedLines.entries()].map(([itemId, quantity]) => ({
@@ -812,8 +822,9 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       if (!poItem) {
         throw new ApiError(400, 'El producto no pertenece a la orden de compra');
       }
-      const remaining = poItem.quantity - poItem.receivedQty;
-      if (line.quantity > remaining) {
+      // Decimal arithmetic exactly on the stored values (never float coercion).
+      const remaining = poItem.quantity.minus(poItem.receivedQty);
+      if (new Prisma.Decimal(line.quantity).gt(remaining)) {
         throw new ApiError(
           409,
           `La cantidad a recibir supera el pendiente de "${poItem.item.name}"`
@@ -824,8 +835,9 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     const updated = await prisma.$transaction(async (tx) => {
       for (const line of lines) {
         const poItem = po.items.find((i) => i.itemId === line.itemId)!;
-        // ledger line unit cost = the PO line cost snapshot.
-        const lineCost = poItem.cost.toNumber();
+        // ledger line unit cost = the PO line cost snapshot (Decimal).
+        const lineCost = poItem.cost;
+        const qty = new Prisma.Decimal(line.quantity);
 
         const [item, inventory] = await Promise.all([
           tx.item.findFirst({ where: { tenantId, id: line.itemId } }),
@@ -844,23 +856,23 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         }
 
         // Weighted-average cost, computed from PRE-receive values inside the
-        // tx: newCost = (oldStock·oldCost + qty·lineCost) / (oldStock + qty);
+        // tx with Decimal (exact on fractions):
+        // newCost = (oldStock·oldCost + qty·lineCost) / (oldStock + qty);
         // a first arrival (oldStock = 0) simply adopts the line cost.
-        const oldStock = inventory.stock.toNumber();
-        const oldCost = item.cost.toNumber();
-        const newStock = oldStock + line.quantity;
-        const newCost =
-          oldStock === 0
-            ? lineCost
-            : round2((oldStock * oldCost + line.quantity * lineCost) / newStock);
+        const newCost = inventory.stock.isZero()
+          ? lineCost
+          : inventory.stock
+              .times(item.cost)
+              .plus(qty.times(lineCost))
+              .dividedBy(inventory.stock.plus(qty));
 
         await tx.item.update({
           where: { id: item.id },
-          data: { cost: newCost },
+          data: { cost: newCost.toDecimalPlaces(2) },
         });
         await tx.inventory.update({
           where: { id: inventory.id },
-          data: { stock: { increment: line.quantity } },
+          data: { stock: { increment: qty } },
         });
         await recordMovement(tx, {
           tenantId,
@@ -868,13 +880,13 @@ export class PrismaDistributionRepository implements IDistributionRepository {
           itemId: line.itemId,
           type: 'RECEIVE',
           quantity: line.quantity,
-          costSnapshot: lineCost,
+          costSnapshot: lineCost.toNumber(),
           userId: input.userId,
           refId: po.id,
         });
         await tx.purchaseOrderItem.updateMany({
           where: { orderId: po.id, itemId: line.itemId },
-          data: { receivedQty: { increment: line.quantity } },
+          data: { receivedQty: { increment: qty } },
         });
       }
 
@@ -882,7 +894,8 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         where: { orderId: po.id },
       });
       const complete =
-        poItems.length > 0 && poItems.every((i) => i.receivedQty >= i.quantity);
+        poItems.length > 0 &&
+        poItems.every((i) => i.receivedQty.comparedTo(i.quantity) >= 0);
 
       return tx.purchaseOrder.update({
         where: { id: po.id },
@@ -918,8 +931,8 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         orderId: i.orderId,
         itemId: i.itemId,
         itemName: i.item.name,
-        quantity: i.quantity,
-        receivedQty: i.receivedQty,
+        quantity: i.quantity.toNumber(),
+        receivedQty: i.receivedQty.toNumber(),
         cost: i.cost.toNumber(),
       })),
     };
@@ -950,12 +963,12 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     // quantity math below is always consistent.
     const mergedLines = new Map<string, number>();
     for (const line of input.items) {
-      if (!Number.isInteger(line.quantity) || line.quantity <= 0) {
+      if (line.quantity <= 0) {
         throw new ApiError(400, 'Cantidad inválida en uno de los productos');
       }
       mergedLines.set(
         line.itemId,
-        (mergedLines.get(line.itemId) ?? 0) + line.quantity
+        round2((mergedLines.get(line.itemId) ?? 0) + line.quantity)
       );
     }
     const lines = [...mergedLines.entries()].map(([itemId, quantity]) => ({
@@ -973,12 +986,14 @@ export class PrismaDistributionRepository implements IDistributionRepository {
 
     const order = await prisma.$transaction(async (tx) => {
       // PO value is priced at item cost; tax is extracted inclusively with the
-      // tenant's default rate, mirroring the registerSale money model.
+      // tenant's default rate, mirroring the registerSale money model. Decimal
+      // multiplication keeps fraction × cost exact (e.g. 2.5 × 2500 = 6250).
       const subtotal = lines.reduce((acc, l) => {
         const item = itemById.get(l.itemId);
-        const cost = item ? item.cost.toNumber() : 0;
-        return acc + cost * l.quantity;
-      }, 0);
+        return item
+          ? acc.plus(item.cost.times(new Prisma.Decimal(l.quantity)))
+          : acc;
+      }, new Prisma.Decimal(0));
 
       const defaultTax =
         (await tx.taxRate.findFirst({
@@ -991,8 +1006,13 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         }));
       const ratePct = defaultTax?.rate.toNumber() ?? 0;
       const taxAmount =
-        ratePct > 0 ? Math.round(subtotal * (ratePct / (100 + ratePct)) * 100) / 100 : 0;
-      const total = Math.round(subtotal * 100) / 100;
+        ratePct > 0
+          ? subtotal
+              .times(ratePct)
+              .dividedBy(100 + ratePct)
+              .toDecimalPlaces(2)
+          : new Prisma.Decimal(0);
+      const total = subtotal.toDecimalPlaces(2);
 
       // Display-only sequential number (no counter table); orderNumber is not
       // unique, so a race here is cosmetic, never a consistency risk.
@@ -1046,8 +1066,8 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         orderId: i.orderId,
         itemId: i.itemId,
         itemName: i.item.name,
-        quantity: i.quantity,
-        receivedQty: i.receivedQty,
+        quantity: i.quantity.toNumber(),
+        receivedQty: i.receivedQty.toNumber(),
         cost: i.cost.toNumber(),
       })),
     };
@@ -1661,8 +1681,8 @@ export class PrismaDistributionRepository implements IDistributionRepository {
 
     const profit = saleItems.reduce(
       (acc, si) =>
-        acc + (si.price.toNumber() - si.item.cost.toNumber()) * si.quantity,
-      0
+        acc.plus(si.price.minus(si.item.cost).times(si.quantity)),
+      new Prisma.Decimal(0)
     );
 
     return {
@@ -1673,7 +1693,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       totalSales: totals._count._all ?? 0,
       taxedRevenue: taxed._sum.total?.toNumber() ?? 0,
       taxCollected: totals._sum.taxAmount?.toNumber() ?? 0,
-      profit: Math.round(profit * 100) / 100,
+      profit: profit.toDecimalPlaces(2).toNumber(),
     };
   }
 
@@ -1854,12 +1874,12 @@ export class PrismaDistributionRepository implements IDistributionRepository {
 
     const mergedLines = new Map<string, number>();
     for (const line of input.lines) {
-      if (line.quantity <= 0 || !Number.isInteger(line.quantity)) {
+      if (line.quantity <= 0) {
         throw new ApiError(400, 'Cantidad inválida en uno de los productos');
       }
       mergedLines.set(
         line.itemId,
-        (mergedLines.get(line.itemId) ?? 0) + line.quantity
+        round2((mergedLines.get(line.itemId) ?? 0) + line.quantity)
       );
     }
     const lines = [...mergedLines.entries()].map(([itemId, quantity]) => ({
@@ -1904,21 +1924,29 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     const taxRatePct = defaultTax?.rate.toNumber() ?? 0;
 
     const saleResult = await prisma.$transaction(async (tx) => {
+      // Decimal multiplication per line: fraction × price stays exact and the
+      // money columns (Decimal(10,2)) receive the true two-decimal value.
       const subtotal = lines.reduce((acc, l) => {
         const item = itemById.get(l.itemId);
-        const price = item ? item.price.toNumber() : 0;
-        return acc + price * l.quantity;
-      }, 0);
+        return item
+          ? acc.plus(item.price.times(new Prisma.Decimal(l.quantity)))
+          : acc;
+      }, new Prisma.Decimal(0));
 
-      const discount = Math.min(Math.max(input.discount, 0), subtotal);
-      const base = subtotal - discount;
-      const taxAmount = taxRatePct > 0 ? base * (taxRatePct / (100 + taxRatePct)) : 0;
+      const discount = new Prisma.Decimal(
+        Math.min(Math.max(input.discount, 0), subtotal.toNumber())
+      );
+      const base = subtotal.minus(discount);
+      const taxAmount =
+        taxRatePct > 0
+          ? base.times(taxRatePct).dividedBy(100 + taxRatePct)
+          : new Prisma.Decimal(0);
       const total = base;
 
       // Server-side money: only the tendered amount is client input; the
       // balance is derived here and the receivable decision follows from it.
-      const paidAmount = input.paidAmount ?? total;
-      const balance = Math.max(0, Math.round((total - paidAmount) * 100) / 100);
+      const paidAmount = input.paidAmount ?? total.toNumber();
+      const balance = Prisma.Decimal.max(0, total.minus(paidAmount)).toNumber();
       if (balance > 0 && !input.personId) {
         throw new ApiError(
           400,
@@ -1927,16 +1955,18 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       }
 
       // Stock: decrement only when the branch has enough; otherwise 409 and the
-      // whole transaction rolls back (nothing is written).
+      // whole transaction rolls back (nothing is written). The Decimal values
+      // serialize exactly (stock is numeric(10,2)), so fraction guards compare
+      // like-for-like (0.30 sold vs 0.30 in stock).
       for (const line of lines) {
         const result = await tx.inventory.updateMany({
           where: {
             tenantId,
             branchId,
             itemId: line.itemId,
-            stock: { gte: line.quantity },
+            stock: { gte: new Prisma.Decimal(line.quantity) },
           },
-          data: { stock: { decrement: line.quantity } },
+          data: { stock: { decrement: new Prisma.Decimal(line.quantity) } },
         });
         if (result.count === 0) {
           const item = itemById.get(line.itemId);
@@ -2023,7 +2053,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
           branchId,
           itemId: si.itemId,
           type: 'SALE',
-          quantity: -si.quantity,
+          quantity: -si.quantity.toNumber(),
           costSnapshot: si.cost.toNumber(),
           userId: input.userId,
           refId: created.id,
@@ -2055,7 +2085,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         id: si.id,
         itemId: si.itemId,
         itemName: si.item.name,
-        quantity: si.quantity,
+        quantity: si.quantity.toNumber(),
         price: si.price.toNumber(),
       })),
     };
@@ -2105,7 +2135,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
           id: si.id,
           itemId: si.itemId,
           itemName: si.item.name,
-          quantity: si.quantity,
+          quantity: si.quantity.toNumber(),
           price: si.price.toNumber(),
         })),
       })),
@@ -2151,7 +2181,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
           returnId: si.returnId,
           itemId: si.itemId,
           itemName: si.item.name,
-          quantity: si.quantity,
+          quantity: si.quantity.toNumber(),
           refundAmount: si.refundAmount.toNumber(),
         })),
       })),
@@ -2169,10 +2199,10 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     // Merge duplicate item lines into single quantities (same pattern as registerSale).
     const merged = new Map<string, number>();
     for (const line of input.items) {
-      if (line.quantity <= 0 || !Number.isInteger(line.quantity)) {
+      if (line.quantity <= 0) {
         throw new ApiError(400, 'Cantidad inválida en la devolución');
       }
-      merged.set(line.itemId, (merged.get(line.itemId) ?? 0) + line.quantity);
+      merged.set(line.itemId, round2((merged.get(line.itemId) ?? 0) + line.quantity));
     }
     const lines = [...merged.entries()].map(([itemId, quantity]) => ({
       itemId,
@@ -2208,18 +2238,20 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         where: { return: { tenantId, saleId } },
         select: { itemId: true, quantity: true },
       });
+      // Exact two-decimal accumulation: Decimal → toNumber round-trips, and
+      // round2 keeps cross-line sums free of float residue (0.1 + 0.2 = 0.3).
       const priorQtyByItem = new Map<string, number>();
       for (const pr of priorReturns) {
         priorQtyByItem.set(
           pr.itemId,
-          (priorQtyByItem.get(pr.itemId) ?? 0) + pr.quantity
+          round2((priorQtyByItem.get(pr.itemId) ?? 0) + pr.quantity.toNumber())
         );
       }
 
       for (const line of lines) {
         const saleItem = sale.items.find((si) => si.itemId === line.itemId)!;
         const prior = priorQtyByItem.get(line.itemId) ?? 0;
-        if (prior + line.quantity > saleItem.quantity) {
+        if (round2(prior + line.quantity) > saleItem.quantity.toNumber()) {
           throw new ApiError(
             409,
             `La cantidad a devolver supera la cantidad vendida de "${saleItem.item.name}"`
@@ -2227,13 +2259,15 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         }
       }
 
-      // Refund = sale-time price × qty (two-decimal rounding only on the total).
-      let totalRefund = 0;
+      // Refund = sale-time price × qty (Decimal exact); only the column
+      // rounding applies at write time.
+      let totalRefund = new Prisma.Decimal(0);
       for (const line of lines) {
         const saleItem = sale.items.find((si) => si.itemId === line.itemId)!;
-        totalRefund += saleItem.price.toNumber() * line.quantity;
+        totalRefund = totalRefund.plus(
+          saleItem.price.times(new Prisma.Decimal(line.quantity))
+        );
       }
-      totalRefund = Math.round(totalRefund * 100) / 100;
 
       // Stock restore: goods go back to the branch where they were sold.
       const branchId = sale.cashSession?.branchId ?? null;
@@ -2262,14 +2296,15 @@ export class PrismaDistributionRepository implements IDistributionRepository {
           where: { tenantId, saleId },
         });
         if (receivable && receivable.balance.toNumber() > 0) {
-          if (totalRefund > receivable.balance.toNumber()) {
+          if (totalRefund.gt(receivable.balance)) {
             throw new ApiError(
               409,
               'La devolución supera el saldo pendiente de la cuenta por cobrar'
             );
           }
-          const newBalance =
-            Math.round((receivable.balance.toNumber() - totalRefund) * 100) / 100;
+          const newBalance = round2(
+            receivable.balance.toNumber() - totalRefund.toNumber()
+          );
           await tx.receivable.update({
             where: { id: receivable.id },
             data: {
@@ -2294,7 +2329,9 @@ export class PrismaDistributionRepository implements IDistributionRepository {
               return {
                 itemId: l.itemId,
                 quantity: l.quantity,
-                refundAmount: saleItem.price.toNumber() * l.quantity,
+                refundAmount: saleItem.price.times(
+                  new Prisma.Decimal(l.quantity)
+                ),
               };
             }),
           },
@@ -2339,7 +2376,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
           returnId: si.returnId,
           itemId: si.itemId,
           itemName: si.item.name,
-          quantity: si.quantity,
+          quantity: si.quantity.toNumber(),
           refundAmount: si.refundAmount.toNumber(),
         })),
       };
@@ -2528,8 +2565,6 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     >();
     for (const sale of sales) {
       for (const si of sale.items) {
-        const cost = si.cost.toNumber();
-        const price = si.price.toNumber();
         const line =
           linesById.get(si.itemId) ?? {
             itemName: si.item.name,
@@ -2538,9 +2573,11 @@ export class PrismaDistributionRepository implements IDistributionRepository {
             lineCost: 0,
             lineRevenue: 0,
           };
-        line.quantity += si.quantity;
-        line.lineCost += cost * si.quantity;
-        line.lineRevenue += price * si.quantity;
+        line.quantity = round2(line.quantity + si.quantity.toNumber());
+        line.lineCost = round2(line.lineCost + si.cost.times(si.quantity).toNumber());
+        line.lineRevenue = round2(
+          line.lineRevenue + si.price.times(si.quantity).toNumber()
+        );
         linesById.set(si.itemId, line);
       }
     }

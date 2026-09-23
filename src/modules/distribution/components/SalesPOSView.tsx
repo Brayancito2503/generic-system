@@ -23,6 +23,9 @@ import type { InventoryStockItem, CustomerLight, SaleEntity, TaxRateEntity, Paym
 import { apiGet, apiSend } from '../api';
 import { formatCurrency, formatSecondaryCurrency } from '../utils/currency';
 
+/** Fase 2 Slice A: cart quantities carry up to two decimals (e.g. 2.5 kg). */
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
 interface CartLine {
   itemId: string;
   name: string;
@@ -134,6 +137,23 @@ export function SalesPOSView() {
   };
 
   const removeLine = (itemId: string) => setCart((prev) => prev.filter((c) => c.itemId !== itemId));
+
+  // Manual quantity entry: typed fractions (2.50) are clamped to
+  // [0.01, stock] and rounded to cents; NaN while the field is mid-edit
+  // (e.g. deleting "2.") leaves the line untouched instead of dropping it.
+  const setLineQty = (itemId: string, raw: string) => {
+    const qty = round2(parseFloat(raw));
+    if (Number.isNaN(qty)) return;
+    setCart((prev) =>
+      prev
+        .map((c) =>
+          c.itemId === itemId
+            ? { ...c, quantity: Math.min(Math.max(qty, 0.01), c.stock) }
+            : c
+        )
+        .filter((c) => c.quantity > 0)
+    );
+  };
 
   const subtotal = cart.reduce((a, c) => a + c.price * c.quantity, 0);
   const discount = Math.min(Math.max(parseFloat(discountInput) || 0, 0), subtotal);
@@ -368,7 +388,16 @@ export function SalesPOSView() {
                   </div>
                   <div className="flex items-center gap-1.5">
                     <button type="button" onClick={() => changeQty(c.itemId, -1)} className="p-1 rounded-md bg-muted hover:bg-accent text-foreground"><Minus className="w-3 h-3" /></button>
-                    <span className="w-6 text-center text-sm font-semibold text-foreground">{c.quantity}</span>
+                    <input
+                      type="number"
+                      min="0.01"
+                      max={c.stock}
+                      step="0.01"
+                      value={c.quantity}
+                      onChange={(e) => setLineQty(c.itemId, e.target.value)}
+                      aria-label={t('sales.qty')}
+                      className="w-16 text-center text-sm font-semibold text-foreground bg-background border border-border rounded-md px-1 py-0.5 focus:outline-none focus:border-primary"
+                    />
                     <button
                       type="button"
                       onClick={() => changeQty(c.itemId, 1)}

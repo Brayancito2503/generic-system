@@ -12,6 +12,21 @@ const nullableText = z.string().trim().max(500).nullish();
 export const idParamSchema = idString;
 const nonNegativeNumber = z.number().finite().nonnegative();
 
+// Fase 2 Slice A: every quantity carrying units (sales, PO create/receive,
+// returns, initial stock) is bounded to two decimals so the kardex, Inventory
+// .stock and the line columns never disagree on the ledger value.
+const quantity2dp = (v: number) => Math.round(v * 100) / 100 === v;
+const quantity2dpPositive = z
+  .number()
+  .finite()
+  .positive()
+  .refine(quantity2dp, 'Máximo 2 decimales');
+const quantity2dpNonNegative = z
+  .number()
+  .finite()
+  .nonnegative()
+  .refine(quantity2dp, 'Máximo 2 decimales');
+
 /** Accepts optional emails that may arrive as '' from legacy forms. */
 const nullableEmail = z
   .string()
@@ -42,7 +57,7 @@ export const updateCustomerSchema = createCustomerSchema
 
 export const purchaseOrderItemSchema = z.object({
   itemId: idString,
-  quantity: z.number().int().positive(),
+  quantity: quantity2dpPositive,
 });
 
 export const createPurchaseOrderSchema = z.object({
@@ -58,7 +73,9 @@ export const receivePurchaseOrderSchema = z.object({
     .array(
       z.object({
         itemId: idString,
-        quantity: z.number().int().positive(),
+        // `quantity` must respect 0 < qty <= remaining; the repo enforces the
+        // upper bound against the still-pending PO quantity (409 when exceeded).
+        quantity: quantity2dpPositive,
       })
     )
     .min(1),
@@ -137,7 +154,10 @@ export const createInventoryItemSchema = z.object({
   description: z.string().trim().max(500).optional(),
   cost: nonNegativeNumber,
   price: nonNegativeNumber,
-  stock: z.number().int().nonnegative().default(0),
+  // Fractional opening stock allowed (Fase 2 Slice A) — an alta can open with
+  // 2.5 units; the INITIAL ledger row and Inventory.stock share the same value.
+  stock: quantity2dpNonNegative.default(0),
+  // minAlert stays an integer threshold (the DB column is Int).
   minAlert: z.number().int().nonnegative().default(5),
 });
 
@@ -151,7 +171,7 @@ export const updateInventoryItemSchema = z
     // `stock` stays parseable so old clients fail LOUDLY at the route (400
     // 'El stock solo se ajusta mediante movimientos de inventario') instead of
     // silently losing the field; the repository double-guards it too.
-    stock: z.number().int().nonnegative().optional(),
+    stock: quantity2dpNonNegative.optional(),
     minAlert: z.number().int().nonnegative().optional(),
     branchId: idString.optional(),
   })
@@ -163,7 +183,7 @@ export const updateInventoryItemSchema = z
 
 export const saleLineSchema = z.object({
   itemId: idString,
-  quantity: z.number().int().positive(),
+  quantity: quantity2dpPositive,
 });
 
 export const registerSaleSchema = z.object({
@@ -218,7 +238,12 @@ export const inventoryAdjustmentReasonSchema = z.enum([
 export const createInventoryAdjustmentSchema = z.object({
   branchId: idString,
   itemId: idString,
-  quantity: z.number().finite().refine((v) => v !== 0, 'La cantidad no puede ser cero'),
+  // Signed per the ledger convention; 2dp-aligned with every other quantity.
+  quantity: z
+    .number()
+    .finite()
+    .refine((v) => v !== 0, 'La cantidad no puede ser cero')
+    .refine((v) => Math.round(v * 100) / 100 === v, 'Máximo 2 decimales'),
   reason: inventoryAdjustmentReasonSchema,
   notes: z.string().trim().max(500).nullish(),
 });
@@ -254,14 +279,14 @@ export const listMovementsQuerySchema = z.object({
   to: optionalStrictDate,
 });
 
-/** Physical-count batch: countedQuantity ≥ 0 per item (fractions allowed). */
+/** Physical-count batch: countedQuantity ≥ 0 per item, 2dp (fractions allowed). */
 export const createCountBatchSchema = z.object({
   branchId: idString,
   items: z
     .array(
       z.object({
         itemId: idString,
-        countedQuantity: z.number().finite().nonnegative(),
+        countedQuantity: quantity2dpNonNegative,
       })
     )
     .min(1),
@@ -275,7 +300,7 @@ export const createCountBatchSchema = z.object({
 
 export const saleReturnItemSchema = z.object({
   itemId: idString,
-  quantity: z.number().int().positive(),
+  quantity: quantity2dpPositive,
 });
 
 export const createSaleReturnSchema = z.object({

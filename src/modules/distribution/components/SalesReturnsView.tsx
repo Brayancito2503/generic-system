@@ -134,7 +134,7 @@ export function SalesReturnsView() {
   };
 
   const qtyFor = (itemId: string) => {
-    const q = parseInt(lineQty[itemId] ?? '0', 10);
+    const q = Math.round((parseFloat(lineQty[itemId] ?? '0') || 0) * 100) / 100;
     return Number.isNaN(q) ? 0 : q;
   };
 
@@ -455,7 +455,7 @@ export function SalesReturnsView() {
                         type="number"
                         min="0"
                         max={line.quantity}
-                        step="1"
+                        step="0.01"
                         value={lineQty[line.itemId] ?? ''}
                         onChange={(e) =>
                           setLineQty((prev) => ({ ...prev, [line.itemId]: e.target.value }))

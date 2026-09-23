@@ -333,6 +333,7 @@
             "noResults": "No results.",
             "stock": "Stock: {count}",
             "itemsCount": "{count} items",
+            "qty": "Qty",
             "discountLabel": "Discount (C$)",
             "note": "Note",
             "noteOptional": "Optional",
