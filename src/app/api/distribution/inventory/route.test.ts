@@ -52,6 +52,7 @@ const ITEM: InventoryStockItem = {
   minAlert: 5,
   isLowStock: false,
   saleUnit: 'LIBRA',
+  unitsSold30d: 42,
 };
 
 function request(method: 'GET' | 'POST', body?: unknown): NextRequest {
@@ -59,6 +60,11 @@ function request(method: 'GET' | 'POST', body?: unknown): NextRequest {
     method,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+}
+
+/** GET with a query string, to exercise the `sort` contract (Fase 2 Slice C). */
+function listRequest(query: string): NextRequest {
+  return new NextRequest(`http://localhost/api/distribution/inventory?${query}`);
 }
 
 beforeEach(() => {
@@ -90,7 +96,8 @@ describe('GET /api/distribution/inventory (guard matrix)', () => {
     const body = (await response.json()) as InventoryStockItem[];
     expect(body).toHaveLength(1);
     // Tenant is never client input: derived from the authenticated session.
-    expect(repoMocks.getInventory).toHaveBeenCalledWith('tenant-1');
+    // An absent `sort` resolves to the historical 'name' ordering.
+    expect(repoMocks.getInventory).toHaveBeenCalledWith('tenant-1', 'name');
   });
 
   it('allows CASHIER, STAFF and TENANT_ADMIN as before', async () => {
@@ -110,6 +117,57 @@ describe('GET /api/distribution/inventory (guard matrix)', () => {
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({ error: 'Permisos insuficientes' });
     expect(repoMocks.getInventory).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/distribution/inventory ?sort= (Fase 2 Slice C)', () => {
+  it('defaults to the historical alphabetical ordering when no sort is sent', async () => {
+    const response = await GET(request('GET'));
+
+    expect(response.status).toBe(200);
+    expect(repoMocks.getInventory).toHaveBeenCalledWith('tenant-1', 'name');
+  });
+
+  it('threads an explicit sort=velocity into the repository', async () => {
+    const response = await GET(listRequest('sort=velocity'));
+
+    expect(response.status).toBe(200);
+    expect(repoMocks.getInventory).toHaveBeenCalledWith('tenant-1', 'velocity');
+  });
+
+  it('accepts the explicit sort=name as the default ordering', async () => {
+    const response = await GET(listRequest('sort=name'));
+
+    expect(response.status).toBe(200);
+    expect(repoMocks.getInventory).toHaveBeenCalledWith('tenant-1', 'name');
+  });
+
+  it('rejects an invalid sort value with 400 and never queries the repo', async () => {
+    const response = await GET(listRequest('sort=stock'));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: 'Datos inválidos' });
+    expect(repoMocks.getInventory).not.toHaveBeenCalled();
+  });
+
+  it('rejects a sort injection attempt (arbitrary orderBy) with 400', async () => {
+    const response = await GET(listRequest('sort=name&orderBy=stock'));
+
+    expect(response.status).toBe(400);
+    expect(repoMocks.getInventory).not.toHaveBeenCalled();
+  });
+
+  it('keeps returning the 30-day units-sold signal in the payload', async () => {
+    repoMocks.getInventory.mockResolvedValue([
+      { ...ITEM, id: 'item_1', unitsSold30d: 42 },
+      { ...ITEM, id: 'item_2', name: 'Arroz Oro', unitsSold30d: 0 },
+    ]);
+
+    const response = await GET(listRequest('sort=velocity'));
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as InventoryStockItem[];
+    expect(body.map((i) => i.unitsSold30d)).toEqual([42, 0]);
   });
 });
 

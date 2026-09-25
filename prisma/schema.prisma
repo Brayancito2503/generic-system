@@ -268,6 +268,12 @@ model SaleItem {
   // Cost snapshot at sale time: margins (daily close report) stay accurate
   // even when the Item.cost is later updated.
   cost     Decimal @db.Decimal(10, 2) @default(0)
+
+  // SaleItem has no tenantId: every tenant-scoped read of its rows (e.g. the
+  // sales-velocity aggregate of the inventory list, which joins Sale by
+  // tenantId + createdAt) reaches them through this FK. Without the index the
+  // planner seq-scans the whole table on each request.
+  @@index([saleId])
 }
 
 // ==========================================

@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiAuth, requireTenantId } from '@/lib/session';
 import { ApiError, handleApiError } from '@/lib/api-error';
-import { noQueryParamsSchema } from '@/core/schemas/tenant';
 import {
   createInventoryItemSchema,
+  inventoryListQuerySchema,
 } from '@/core/schemas/distribution';
 import { PrismaDistributionRepository } from '@/infrastructure/db/repositories/prisma-distribution.repository';
 
@@ -18,12 +18,15 @@ export async function GET(request: NextRequest) {
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 
-    const query = noQueryParamsSchema.safeParse(
+    // Fase 2 Slice C: the closed `sort` enum (name | velocity) replaces the
+    // former no-params contract on THIS route. `.strict()` still rejects any
+    // other query param with 400, and tenantId is never client input.
+    const query = inventoryListQuerySchema.safeParse(
       Object.fromEntries(request.nextUrl.searchParams.entries())
     );
     if (!query.success) throw new ApiError(400, 'Datos inválidos');
 
-    const items = await repository.getInventory(tenantId);
+    const items = await repository.getInventory(tenantId, query.data.sort);
     return NextResponse.json(items);
   } catch (error) {
     return handleApiError(error);

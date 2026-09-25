@@ -49,6 +49,7 @@ import type {
   InventoryMovementEntity,
   InventoryMovementType,
   InventoryStockItem,
+  InventorySort,
   MermaSummary,
   PaginatedResult,
   PaymentMethod,
@@ -449,14 +450,44 @@ export class PrismaDistributionRepository implements IDistributionRepository {
   }
 
   // ─── Inventory ──────────────────────────────────────────────────────────────
-  async getInventory(tenantId: string): Promise<InventoryStockItem[]> {
+  /**
+   * Units sold per item over the last 30 days (Fase 2 Slice C).
+   *
+   * SaleItem carries no `tenantId`, so BOTH the tenant and the date window are
+   * applied through the `sale` relation — the single grouped aggregate keeps
+   * this to one query no matter how large the catalog or the sales history is.
+   * Sums stay as Decimal because the ordering compares them exactly: a float
+   * tie (0.1 + 0.2 vs 0.3) would otherwise reorder equal products.
+   */
+  private async getUnitsSoldLast30d(
+    tenantId: string
+  ): Promise<Map<string, Prisma.Decimal>> {
+    const since = new Date();
+    since.setDate(since.getDate() - 30);
+
+    const grouped = await prisma.saleItem.groupBy({
+      by: ['itemId'],
+      where: { sale: { tenantId, createdAt: { gte: since } } },
+      _sum: { quantity: true },
+    });
+
+    return new Map(
+      grouped.map((g) => [g.itemId, g._sum.quantity ?? new Prisma.Decimal(0)])
+    );
+  }
+
+  async getInventory(
+    tenantId: string,
+    sort: InventorySort = 'name'
+  ): Promise<InventoryStockItem[]> {
     const rows = await prisma.inventory.findMany({
       where: { tenantId },
       include: { item: true },
       orderBy: { item: { name: 'asc' } },
     });
 
-    return rows.map((row) => ({
+    const unitsSold30d = await this.getUnitsSoldLast30d(tenantId);
+    const items = rows.map((row) => ({
       id: row.item.id,
       tenantId: row.tenantId,
       sku: row.item.sku,
@@ -468,7 +499,26 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       minAlert: row.minAlert,
       isLowStock: row.stock.toNumber() < row.minAlert,
       saleUnit: row.item.saleUnit ?? null,
+      // Never-sold products are absent from the aggregate: they score 0.
+      unitsSold30d: unitsSold30d.get(row.item.id)?.toNumber() ?? 0,
     }));
+
+    if (sort === 'velocity') {
+      // The rows already arrive `item.name` asc and Array#sort is stable, so
+      // ranking by the aggregate alone gives the required "30-day units desc,
+      // ties by Item.name asc" and pushes never-sold products (0, and sale
+      // quantities are always positive) to the end — no second round-trip and
+      // no locale-dependent string comparison.
+      const zero = new Prisma.Decimal(0);
+      items.sort(
+        (a, b) =>
+          (unitsSold30d.get(b.id) ?? zero).comparedTo(
+            unitsSold30d.get(a.id) ?? zero
+          )
+      );
+    }
+
+    return items;
   }
 
   async createInventoryItem(

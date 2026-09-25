@@ -4,6 +4,7 @@ import {
   createInventoryAdjustmentSchema,
   createInventoryItemSchema,
   createSaleReturnSchema,
+  inventoryListQuerySchema,
   purchaseOrderItemSchema,
   receivePurchaseOrderSchema,
   registerSaleSchema,
@@ -167,5 +168,35 @@ describe('fractional quantity contract (2 decimals max)', () => {
     if (!bad.success) {
       expect(bad.error.issues.some((i) => i.message === MAX_2DP)).toBe(true);
     }
+  });
+});
+
+describe('inventoryListQuerySchema: closed sort enum (Fase 2 Slice C)', () => {
+  it('defaults to the historical alphabetical order when no sort is sent', () => {
+    const parsed = inventoryListQuerySchema.safeParse({});
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.sort).toBe('name');
+  });
+
+  it('accepts exactly the two supported orders', () => {
+    for (const sort of ['name', 'velocity'] as const) {
+      const parsed = inventoryListQuerySchema.safeParse({ sort });
+      expect(parsed.success).toBe(true);
+      if (parsed.success) expect(parsed.data.sort).toBe(sort);
+    }
+  });
+
+  it('rejects any other sort value (no free-form orderBy escape hatch)', () => {
+    for (const sort of ['stock', 'NAME', 'velocity; drop table', '']) {
+      expect(inventoryListQuerySchema.safeParse({ sort }).success).toBe(false);
+    }
+  });
+
+  it('stays strict: an extra query param is still rejected (was noQueryParamsSchema)', () => {
+    expect(
+      inventoryListQuerySchema.safeParse({ sort: 'name', orderBy: 'stock' }).success
+    ).toBe(false);
+    // tenantId is server-derived; a client-supplied one has no place in the query.
+    expect(inventoryListQuerySchema.safeParse({ tenantId: 'tenant-2' }).success).toBe(false);
   });
 });

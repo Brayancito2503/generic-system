@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { Package, Search, Plus, AlertTriangle, TrendingUp, TrendingDown, Edit2, X, Loader2, Trash2, ClipboardCheck, History } from 'lucide-react';
-import type { InventoryStockItem, PurchaseOrderEntity, CashSessionEntity } from '../entities';
+import type { InventoryStockItem, InventorySort, PurchaseOrderEntity, CashSessionEntity } from '../entities';
 import { apiGet, apiSend } from '../api';
 import { isCashier, isAccountant, hasFullAccess } from '../lib/roles';
 import { saleUnitSuffix } from '../lib/sale-units';
@@ -34,6 +34,10 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
   const fmt = (n: number) => formatCurrency(n, tenantSettingsData?.settings);
   const [search, setSearch] = useState('');
   const [filterLowStock, setFilterLowStock] = useState(false);
+  // Fase 2 Slice C: the ordering is SERVER-side (it ranks by an aggregate the
+  // browser cannot compute), so the selection is part of the query key and the
+  // request path — never a client-side sort of `items`.
+  const [sortBy, setSortBy] = useState<InventorySort>('name');
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<ProductFormData>(emptyForm);
   const [editId, setEditId] = useState<string | null>(null);
@@ -55,8 +59,10 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
   const [tab, setTab] = useState<InventoryTab>('list');
 
   const { data: items = [], isPending, isError } = useQuery<InventoryStockItem[]>({
-    queryKey: ['inventory'],
-    queryFn: () => apiGet<InventoryStockItem[]>(`/inventory`),
+    // Prefix-compatible with every `invalidateQueries({ queryKey: ['inventory'] })`
+    // in the module, so a stock write still refreshes the list in any order.
+    queryKey: ['inventory', sortBy],
+    queryFn: () => apiGet<InventoryStockItem[]>(`/inventory?sort=${sortBy}`),
   });
 
   // There is no branch selector endpoint: the tenant's branch is derived from
@@ -255,6 +261,20 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
         >
           <AlertTriangle className="w-4 h-4" /> {t('inventory.lowStock')}
         </button>
+        {/* Sales-velocity ordering (Fase 2 Slice C): reorders stock priorities
+            by what actually sells, so the reorder list matches demand. */}
+        <div className="flex items-center gap-2">
+          <TrendingUp className="w-4 h-4 text-muted-foreground" />
+          <select
+            value={sortBy}
+            onChange={e => setSortBy(e.target.value as InventorySort)}
+            aria-label={t('inventory.sortBy')}
+            className="bg-card border border-border rounded-lg px-3 py-2.5 text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          >
+            <option value="name">{t('inventory.sortName')}</option>
+            <option value="velocity">{t('inventory.sortVelocity')}</option>
+          </select>
+        </div>
       </div>
 
       {/* Loading / Error / Table */}
@@ -276,6 +296,9 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
                   <th className="text-right text-xs text-muted-foreground font-medium px-4 py-3">{t('inventory.colPrice')}</th>
                   <th className="text-right text-xs text-muted-foreground font-medium px-4 py-3">{t('inventory.colMargin')}</th>
                   <th className="text-center text-xs text-muted-foreground font-medium px-4 py-3">{t('inventory.colStock')}</th>
+                  {sortBy === 'velocity' && (
+                    <th className="text-center text-xs text-muted-foreground font-medium px-4 py-3">{t('inventory.colUnitsSold30d')}</th>
+                  )}
                   <th className="text-center text-xs text-muted-foreground font-medium px-4 py-3">{t('inventory.colMinAlert')}</th>
                   <th className="text-center text-xs text-muted-foreground font-medium px-4 py-3">{t('inventory.colStatus')}</th>
                   <th className="text-center text-xs text-muted-foreground font-medium px-4 py-3">{t('inventory.colActions')}</th>
@@ -298,6 +321,13 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
                       <td className="px-4 py-3 text-center font-bold text-foreground">
                         {item.stock}{unit ? ` ${unit}` : ''}
                       </td>
+                      {/* The ranking signal only appears in the ordering that
+                          produced it: absent on the alphabetical default. */}
+                      {sortBy === 'velocity' && (
+                        <td className="px-4 py-3 text-center font-mono text-xs text-foreground">
+                          {item.unitsSold30d ?? 0}{unit ? ` ${unit}` : ''}
+                        </td>
+                      )}
                       <td className="px-4 py-3 text-center text-muted-foreground">{item.minAlert}</td>
                       <td className="px-4 py-3 text-center">
                         <span className={`text-xs font-semibold px-2 py-1 rounded-full ${item.isLowStock ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'}`}>

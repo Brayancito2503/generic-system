@@ -4,6 +4,7 @@
 
 import { z } from 'zod';
 import { hasAnyDefinedField } from './tenant';
+import type { InventorySort } from '../entities/distribution';
 
 const idString = z.string().trim().min(1).max(60);
 const nullableText = z.string().trim().max(500).nullish();
@@ -183,6 +184,25 @@ export const updateInventoryItemSchema = z
     branchId: idString.optional(),
   })
   .refine(hasAnyDefinedField, { message: 'No hay campos válidos para actualizar' });
+
+/**
+ * List query for `GET /inventory` (Fase 2 Slice C). The ONLY accepted parameter
+ * is `sort`, a closed enum — there is deliberately no free-form orderBy escape
+ * hatch, so a client can never inject an arbitrary Prisma order. `.strict()`
+ * preserves the guarantee `noQueryParamsSchema` gave this route: any other
+ * query param is still a 400.
+ *
+ * The enum values are pinned to the `InventorySort` union with an explicit type
+ * argument, so adding a sort mode to the domain type without wiring it here (or
+ * the reverse) fails to compile instead of drifting silently.
+ */
+export const inventoryListQuerySchema = z
+  .object({
+    sort: z
+      .enum<InventorySort, ['name', 'velocity']>(['name', 'velocity'])
+      .default('name'),
+  })
+  .strict();
 
 // ---------------------------------------------------------------------------
 // Sales (paymentMethod / paidAmount / balance for P1; money math server-side)

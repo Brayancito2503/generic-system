@@ -16,6 +16,7 @@ import type {
   InventoryMovementEntity,
   InventoryMovementType,
   InventoryStockItem,
+  InventorySort,
   ItemSaleUnit,
   MermaSummary,
   PaginatedResult,
@@ -298,7 +299,16 @@ export interface CreateInventoryCountBatchInput {
 
 export interface IDistributionRepository {
   getDashboard(tenantId: string): Promise<DistributionDashboardStats>;
-  getInventory(tenantId: string): Promise<InventoryStockItem[]>;
+  /**
+   * Product list for the tenant, ordered by `sort` (Fase 2 Slice C): `name`
+   * (Item.name asc, the default) or `velocity` (units sold in the last 30 days
+   * desc, ties by Item.name asc, never-sold products last). Every row carries
+   * `unitsSold30d`; omitting `sort` is identical to `'name'`.
+   */
+  getInventory(
+    tenantId: string,
+    sort?: InventorySort
+  ): Promise<InventoryStockItem[]>;
   createInventoryItem(
     tenantId: string,
     input: CreateInventoryItemInput

@@ -222,6 +222,16 @@ export interface CustomerLight {
   phone?: string | null;
 }
 
+/**
+ * Ordering of the inventory product list (Fase 2 Slice C).
+ * - `name`: Item.name asc — the historical default (alphabetical).
+ * - `velocity`: units sold in the last 30 days desc, ties broken by Item.name
+ *   asc, never-sold products last.
+ * Mirrored by the closed Zod enum `inventoryListQuerySchema.sort`; this type is
+ * the domain vocabulary so ports and modules never depend on the schema layer.
+ */
+export type InventorySort = 'name' | 'velocity';
+
 export interface InventoryStockItem {
   id: string;
   tenantId: string;
@@ -235,6 +245,16 @@ export interface InventoryStockItem {
   isLowStock: boolean;
   /** Sale unit (Fase 2 Slice B); null/UNIDAD = legacy piece-based. */
   saleUnit?: ItemSaleUnit | null;
+  /**
+   * Units sold in the last 30 days (Fase 2 Slice C): the sales-velocity signal
+   * behind the `velocity` ordering, summed from SaleItem over the tenant's Sale
+   * window (0 when the product never sold).
+   *
+   * Optional because it is a LIST ranking signal, not item state: `getInventory`
+   * always populates it, while the single-item responses of create/update omit
+   * it instead of reporting a misleading 0 for an existing product.
+   */
+  unitsSold30d?: number;
 }
 
 // ─── Inventory ledger (kardex) ───────────────────────────────────────────────
