@@ -36,17 +36,28 @@ export const ALL_TABS = [
   'cash',
   'suppliers',
   'employees',
+  'branches',
   'tax',
   'reportes',
   'settings',
 ] as const;
 
 const RESTRICTED_TABS: Record<string, readonly string[]> = {
-  CASHIER: ['dashboard', 'inventory', 'sales', 'customers', 'receivables'],
+  CASHIER: ['dashboard', 'inventory', 'sales', 'customers', 'receivables', 'branches'],
   // Inventory is read-only for accounting (GET list, count, movements); the
   // create/edit/delete affordances are hidden client-side via the POST and
   // PATCH/DELETE guard sets.
-  ACCOUNTANT: ['dashboard', 'receivables', 'cash', 'suppliers', 'reportes', 'inventory'],
+  // Branch management (create/edit) is TENANT_ADMIN-only server-side, so the
+  // tab is hidden here too and the UI never offers an action that 403s.
+  ACCOUNTANT: [
+    'dashboard',
+    'receivables',
+    'cash',
+    'suppliers',
+    'reportes',
+    'inventory',
+    'branches',
+  ],
 };
 
 /** Tabs visible to the given session role; full set while unknown/legacy. */

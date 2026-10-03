@@ -15,6 +15,10 @@ import { PrismaDistributionRepository } from '@/infrastructure/db/repositories/p
 // prisma-distribution.fractional.test.ts / inventory-ledger.test.ts).
 const txMocks = vi.hoisted(() => ({
   branchFindFirst: vi.fn(),
+  // D11: registerSale derives the sale's branch from the session user's
+  // Employee record, so both sale suites carry this mock surface (R8).
+  branchFindMany: vi.fn(),
+  employeeFindFirst: vi.fn(),
   itemFindMany: vi.fn(),
   itemFindFirst: vi.fn(),
   itemCreate: vi.fn(),
@@ -24,6 +28,7 @@ const txMocks = vi.hoisted(() => ({
   inventoryUpdateMany: vi.fn(),
   inventoryMovementCreate: vi.fn(),
   cashSessionFindFirst: vi.fn(),
+  cashSessionUpdateMany: vi.fn(),
   personFindFirst: vi.fn(),
   taxRateFindFirst: vi.fn(),
   saleCounterUpsert: vi.fn(),
@@ -33,7 +38,8 @@ const txMocks = vi.hoisted(() => ({
 
 vi.mock('@/infrastructure/db/prisma', () => {
   const tx = {
-    branch: { findFirst: txMocks.branchFindFirst },
+    branch: { findFirst: txMocks.branchFindFirst, findMany: txMocks.branchFindMany },
+    employee: { findFirst: txMocks.employeeFindFirst },
     item: {
       findMany: txMocks.itemFindMany,
       findFirst: txMocks.itemFindFirst,
@@ -46,7 +52,10 @@ vi.mock('@/infrastructure/db/prisma', () => {
       updateMany: txMocks.inventoryUpdateMany,
     },
     inventoryMovement: { create: txMocks.inventoryMovementCreate },
-    cashSession: { findFirst: txMocks.cashSessionFindFirst },
+    cashSession: {
+      findFirst: txMocks.cashSessionFindFirst,
+      updateMany: txMocks.cashSessionUpdateMany,
+    },
     person: { findFirst: txMocks.personFindFirst },
     taxRate: { findFirst: txMocks.taxRateFindFirst },
     saleCounter: { upsert: txMocks.saleCounterUpsert },
@@ -187,6 +196,13 @@ beforeEach(() => {
 
   // registerSale defaults
   txMocks.cashSessionFindFirst.mockResolvedValue(OPEN_SESSION);
+  txMocks.cashSessionUpdateMany.mockResolvedValue({ count: 1 });
+  // D11: the session user's Employee is assigned to the same branch as the open
+  // session, so the derived branch matches OPEN_SESSION.branchId.
+  txMocks.employeeFindFirst.mockResolvedValue({
+    branchId: BRANCH.id,
+    branch: BRANCH,
+  });
   txMocks.itemFindMany.mockResolvedValue([weightItem()]);
   txMocks.personFindFirst.mockResolvedValue(null);
   txMocks.taxRateFindFirst.mockResolvedValue(null);

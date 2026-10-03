@@ -2,14 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireApiAuth, requireTenantId } from '@/lib/session';
 import { ApiError, handleApiError } from '@/lib/api-error';
 import { noQueryParamsSchema } from '@/core/schemas/tenant';
-import { openCashSessionSchema } from '@/core/schemas/distribution';
+import { createBranchSchema } from '@/core/schemas/distribution';
 import { PrismaDistributionRepository } from '@/infrastructure/db/repositories/prisma-distribution.repository';
 
 const repository = new PrismaDistributionRepository();
 
 export async function GET(request: NextRequest) {
   try {
-    const session = await requireApiAuth(['ACCOUNTANT', 'STAFF', 'TENANT_ADMIN']);
+    // Read: every distribution profile resolves the branch a sale or a stock
+    // row belongs to, so the list is visible to all of them.
+    await requireApiAuth(['ACCOUNTANT', 'STAFF', 'TENANT_ADMIN']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 
@@ -18,9 +20,10 @@ export async function GET(request: NextRequest) {
     );
     if (!query.success) throw new ApiError(400, 'Datos inválidos');
 
-    // D11: the register is resolved at the caller's own branch, server-side.
-    const open = await repository.getOpenCashSession(tenantId, session.userId);
-    return NextResponse.json(open);
+    // Tenant comes from the session, never from a query param: a `?tenantId=`
+    // is rejected by `noQueryParamsSchema` above.
+    const branches = await repository.listBranches(tenantId);
+    return NextResponse.json(branches);
   } catch (error) {
     return handleApiError(error);
   }
@@ -28,25 +31,24 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await requireApiAuth(['ACCOUNTANT', 'STAFF', 'TENANT_ADMIN']);
+    // Write: branch management is a tenant-level decision, so it stays
+    // TENANT_ADMIN-only — the same guard the tenant settings route uses.
+    await requireApiAuth(['TENANT_ADMIN']);
     const tenantId = await requireTenantId();
     if (!tenantId) throw new ApiError(401, 'No autorizado');
 
     const body: unknown = await request.json();
-    const parsed = openCashSessionSchema.safeParse(body);
+    const parsed = createBranchSchema.safeParse(body);
     if (!parsed.success) throw new ApiError(400, 'Datos inválidos');
 
-    // D11: the branch is derived from `session.userId` inside the repository, so
-    // the register cannot be pointed at a branch the client chose. An older
-    // client still sending `branchId` is unaffected — the non-strict schema drops
-    // the unknown key.
-    const opened = await repository.openCashSession(tenantId, {
-      openingAmount: parsed.data.openingAmount,
-      employeeId: parsed.data.employeeId ?? null,
-      userId: session.userId,
+    // `tenantId` is absent from `createBranchSchema`, so a client-supplied one
+    // is stripped by the non-strict object and never reaches the repository.
+    const created = await repository.createBranch(tenantId, {
+      name: parsed.data.name,
+      address: parsed.data.address ?? null,
     });
 
-    return NextResponse.json(opened, { status: 201 });
+    return NextResponse.json(created, { status: 201 });
   } catch (error) {
     return handleApiError(error);
   }

@@ -3,6 +3,7 @@
 
 import type {
   AccessRole,
+  BranchEntity,
   CashMovementEntity,
   CashSessionEntity,
   CustomerLight,
@@ -70,6 +71,21 @@ export interface UpdateInventoryItemInput {
   branchId?: string;
 }
 
+export interface CreateBranchInput {
+  name: string;
+  address?: string | null;
+}
+
+/**
+ * PATCH semantics (same contract as `UpdateSupplierInput`): undefined fields
+ * are left untouched, `address: null` clears the nullable column. A branch id
+ * owned by another tenant resolves as 404, never as that branch.
+ */
+export interface UpdateBranchInput {
+  name?: string;
+  address?: string | null;
+}
+
 export interface CreateSupplierInput {
   name: string;
   contactName?: string | null;
@@ -110,9 +126,16 @@ export interface CreateEmployeeInput {
 }
 
 export interface OpenCashSessionInput {
-  branchId: string;
   openingAmount: number;
   employeeId?: string | null;
+  /**
+   * Session user opening the register (D11). The branch is NOT an input: it is
+   * derived from this user's `Employee` record inside the repository, so the
+   * client has no field to spoof. An older client still sending `branchId` is
+   * unaffected — `openCashSessionSchema` is a non-strict object that drops
+   * unknown keys.
+   */
+  userId: string;
 }
 
 export interface AddCashMovementInput {
@@ -298,7 +321,33 @@ export interface CreateInventoryCountBatchInput {
 }
 
 export interface IDistributionRepository {
-  getDashboard(tenantId: string): Promise<DistributionDashboardStats>;
+  getDashboard(
+    tenantId: string,
+    userId: string
+  ): Promise<DistributionDashboardStats>;
+  /**
+   * Branches of the tenant, oldest first (the creation order is also the
+   * documented fallback order for unnamed stock writes). Tenant-scoped read:
+   * another tenant's branches are never returned.
+   */
+  listBranches(tenantId: string): Promise<BranchEntity[]>;
+  /**
+   * Creates a branch explicitly for the session tenant. `tenantId` is NOT part
+   * of the input: the repository derives it from its first argument, so a
+   * client-supplied tenant can never reach the write. There is no delete
+   * counterpart — a branch with history keeps it.
+   */
+  createBranch(tenantId: string, input: CreateBranchInput): Promise<BranchEntity>;
+  /**
+   * Partial edit of a branch owned by the session tenant. Undefined fields stay
+   * untouched and `address: null` clears the address; a branch id owned by
+   * another tenant resolves as 404 and writes nothing.
+   */
+  updateBranch(
+    tenantId: string,
+    branchId: string,
+    input: UpdateBranchInput
+  ): Promise<BranchEntity>;
   /**
    * Product list for the tenant, ordered by `sort` (Fase 2 Slice C): `name`
    * (Item.name asc, the default) or `velocity` (units sold in the last 30 days
@@ -369,7 +418,15 @@ export interface IDistributionRepository {
     employeeId: string,
     input: UpdateEmployeeInput
   ): Promise<EmployeeEntity>;
-  getOpenCashSession(tenantId: string): Promise<CashSessionEntity | null>;
+  /**
+   * The register OPEN at the branch DERIVED from `userId` (D11), never an
+   * arbitrary one of the tenant's. Throws the actionable 400 when no branch can
+   * be derived, so "wrong register" is never mistaken for "no register open".
+   */
+  getOpenCashSession(
+    tenantId: string,
+    userId: string
+  ): Promise<CashSessionEntity | null>;
   openCashSession(
     tenantId: string,
     input: OpenCashSessionInput

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createBranchSchema,
   createCountBatchSchema,
   createInventoryAdjustmentSchema,
   createInventoryItemSchema,
@@ -9,6 +10,7 @@ import {
   receivePurchaseOrderSchema,
   registerSaleSchema,
   saleReturnItemSchema,
+  updateBranchSchema,
 } from './distribution';
 
 // Fase 2 Slice A contract: every quantity carrying units admits at most two
@@ -198,5 +200,82 @@ describe('inventoryListQuerySchema: closed sort enum (Fase 2 Slice C)', () => {
     ).toBe(false);
     // tenantId is server-derived; a client-supplied one has no place in the query.
     expect(inventoryListQuerySchema.safeParse({ tenantId: 'tenant-2' }).success).toBe(false);
+  });
+});
+
+describe('branch schemas: tenant-owned create + partial edit (distribution-branches R1)', () => {
+  it('createBranchSchema requires a name and trims it', () => {
+    const parsed = createBranchSchema.safeParse({ name: '  Sucursal Norte  ' });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.name).toBe('Sucursal Norte');
+  });
+
+  it('createBranchSchema rejects a blank name and a non-string name', () => {
+    expect(createBranchSchema.safeParse({ name: '   ' }).success).toBe(false);
+    expect(createBranchSchema.safeParse({}).success).toBe(false);
+    expect(createBranchSchema.safeParse({ name: 42 }).success).toBe(false);
+  });
+
+  it('createBranchSchema strips a client tenantId instead of failing on it', () => {
+    // Non-strict by design: the tenant is server-derived, so an extra key is
+    // dropped rather than rejected (and it can never reach the repository).
+    const parsed = createBranchSchema.safeParse({ name: 'Sucursal Norte', tenantId: 'tenant-2' });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data).not.toHaveProperty('tenantId');
+      // Zod drops keys absent from the input entirely (no `address: undefined`).
+      expect(Object.keys(parsed.data)).toEqual(['name']);
+    }
+  });
+
+  it('createBranchSchema maps an omitted address to null', () => {
+    const parsed = createBranchSchema.safeParse({ name: 'Sucursal Norte' });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.address).toBeUndefined();
+  });
+
+  it('updateBranchSchema keeps an omitted field undefined (untouched)', () => {
+    const parsed = updateBranchSchema.safeParse({ name: 'Sucursal Centro' });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.name).toBe('Sucursal Centro');
+      // Absent, NOT null: null would clear the address the operator never named.
+      expect(parsed.data.address).toBeUndefined();
+      expect(Object.keys(parsed.data)).toEqual(['name']);
+    }
+  });
+
+  it('updateBranchSchema keeps an explicit null address so it can be cleared', () => {
+    const parsed = updateBranchSchema.safeParse({ address: null });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.address).toBeNull();
+      expect(parsed.data.name).toBeUndefined();
+    }
+  });
+
+  it('updateBranchSchema rejects a body with no editable field at all', () => {
+    const parsed = updateBranchSchema.safeParse({});
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) expect(parsed.error.issues[0].message).toBe(
+      'No hay campos válidos para actualizar'
+    );
+  });
+
+  it('updateBranchSchema still trims and bounds a submitted name', () => {
+    const parsed = updateBranchSchema.safeParse({ name: '  Sucursal Sur  ' });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.name).toBe('Sucursal Sur');
+    expect(updateBranchSchema.safeParse({ name: '   ' }).success).toBe(false);
+    expect(updateBranchSchema.safeParse({ name: 'x'.repeat(201) }).success).toBe(false);
+  });
+
+  it('updateBranchSchema strips a client tenantId (Rule #1)', () => {
+    const parsed = updateBranchSchema.safeParse({ name: 'Sucursal Sur', tenantId: 'tenant-2' });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data).not.toHaveProperty('tenantId');
+      expect(Object.keys(parsed.data)).toEqual(['name']);
+    }
   });
 });

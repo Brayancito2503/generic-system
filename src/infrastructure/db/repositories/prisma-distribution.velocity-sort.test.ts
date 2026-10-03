@@ -27,13 +27,13 @@ vi.mock('@/infrastructure/db/prisma', () => ({
 const repo = new PrismaDistributionRepository();
 const decimal = (n: number) => new Prisma.Decimal(n);
 
-/** Inventory row with its Item graph, as `getInventory` reads it. */
-function inventoryRow(id: string, name: string, stock = 10) {
+/** Inventory row with its Item + Branch graph, as `getInventory` reads it. */
+function inventoryRow(id: string, name: string, stock = 10, branchId = 'branch-1') {
   return {
-    id: `inv_${id}`,
+    id: `inv_${id}_${branchId}`,
     tenantId: 'tenant-1',
     itemId: id,
-    branchId: 'branch-1',
+    branchId,
     stock: decimal(stock),
     minAlert: 5,
     item: {
@@ -47,6 +47,11 @@ function inventoryRow(id: string, name: string, stock = 10) {
       saleUnit: null,
       isService: false,
       attributes: {},
+    },
+    branch: {
+      id: branchId,
+      tenantId: 'tenant-1',
+      name: branchId === 'branch-2' ? 'Sucursal Norte' : 'Sucursal Central',
     },
   };
 }
@@ -206,5 +211,112 @@ describe('getInventory — sort=velocity', () => {
       'Detergente 5L',
     ]);
     expect(items.every((i) => i.unitsSold30d === 0)).toBe(true);
+  });
+});
+
+// S1a (multi-branch read correctness). `Inventory` is uniquely keyed by
+// (tenantId, itemId, branchId), so the SAME product stocked at two branches is
+// two legitimate rows — but today both carry `id: row.item.id`, so the list
+// cannot tell them apart and the ranking treats the duplicate as extra weight.
+describe('getInventory — branch-explicit rows (S1a)', () => {
+  /** Aceite at both branches + Arroz at the first one, name-asc as the DB returns. */
+  const MULTI_BRANCH_ROWS = [
+    inventoryRow('item_1', 'Aceite Vegetal 1L', 4, 'branch-1'),
+    inventoryRow('item_1', 'Aceite Vegetal 1L', 7, 'branch-2'),
+    inventoryRow('item_2', 'Arroz Oro', 10, 'branch-1'),
+  ];
+
+  it('returns one row per branch with a distinct branchId', async () => {
+    dbMocks.inventoryFindMany.mockResolvedValue(MULTI_BRANCH_ROWS);
+
+    const items = await repo.getInventory('tenant-1');
+
+    expect(items).toHaveLength(3);
+    expect(items.map((i) => i.branchId)).toEqual([
+      'branch-1',
+      'branch-2',
+      'branch-1',
+    ]);
+    // Each branch row keeps ITS OWN stock: the duplicate is not collapsed, and
+    // the two rows are distinguishable instead of looking identical.
+    expect(items[0].stock).toBe(4);
+    expect(items[1].stock).toBe(7);
+  });
+
+  it('identifies a stock row by (product id, branchId), never by id alone', async () => {
+    dbMocks.inventoryFindMany.mockResolvedValue(MULTI_BRANCH_ROWS);
+
+    const items = await repo.getInventory('tenant-1');
+
+    // `id` stays the product id because catalog mutations resolve the item.
+    // The pair is what makes the row unique: two branches, one product.
+    expect(items.filter((i) => i.id === 'item_1')).toHaveLength(2);
+    const pairs = items.map((i) => `${i.id}@${i.branchId}`);
+    expect(new Set(pairs).size).toBe(pairs.length);
+  });
+
+  it('keeps the read tenant-scoped so no branch of another tenant can appear', async () => {
+    dbMocks.inventoryFindMany.mockResolvedValue(MULTI_BRANCH_ROWS);
+
+    await repo.getInventory('tenant-1');
+
+    expect(dbMocks.inventoryFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { tenantId: 'tenant-1' } })
+    );
+  });
+
+  it('ranks the duplicated product once per branch, not twice overall', async () => {
+    dbMocks.inventoryFindMany.mockResolvedValue(MULTI_BRANCH_ROWS);
+    dbMocks.saleItemGroupBy.mockResolvedValue([
+      { itemId: 'item_1', _sum: { quantity: decimal(12) } },
+    ]);
+
+    const items = await repo.getInventory('tenant-1', 'velocity');
+
+    // One product, one score: both of its branch rows carry the SAME
+    // unitsSold30d and stay adjacent, ranked above the never-sold Arroz.
+    expect(items.map((i) => i.unitsSold30d)).toEqual([12, 12, 0]);
+    expect(items.map((i) => `${i.name}@${i.branchId}`)).toEqual([
+      'Aceite Vegetal 1L@branch-1',
+      'Aceite Vegetal 1L@branch-2',
+      'Arroz Oro@branch-1',
+    ]);
+  });
+
+  it('a higher-velocity product still outranks a product present in two branches', async () => {
+    dbMocks.inventoryFindMany.mockResolvedValue(MULTI_BRANCH_ROWS);
+    dbMocks.saleItemGroupBy.mockResolvedValue([
+      { itemId: 'item_1', _sum: { quantity: decimal(3) } },
+      { itemId: 'item_2', _sum: { quantity: decimal(50) } },
+    ]);
+
+    const items = await repo.getInventory('tenant-1', 'velocity');
+
+    // Storing a product in two branches must not inflate its rank past a
+    // genuinely faster mover: Arroz (50) leads even though Aceite has 2 rows.
+    expect(items.map((i) => `${i.name}@${i.branchId}`)).toEqual([
+      'Arroz Oro@branch-1',
+      'Aceite Vegetal 1L@branch-1',
+      'Aceite Vegetal 1L@branch-2',
+    ]);
+  });
+
+  it('reports cost from the catalog while the branch cost model is still unbuilt', async () => {
+    // `ItemBranchCost` (M1) lands in S2a, so `cost` here is still the item-level
+    // catalog cost. Pinning it keeps S1a honest instead of inventing a
+    // per-branch cost column that does not exist.
+    dbMocks.inventoryFindMany.mockResolvedValue(MULTI_BRANCH_ROWS);
+
+    const items = await repo.getInventory('tenant-1');
+
+    expect(items.map((i) => i.cost)).toEqual([30, 30, 30]);
+  });
+
+  it('leaves lotControl undefined until the Item column lands in S3a', async () => {
+    dbMocks.inventoryFindMany.mockResolvedValue(MULTI_BRANCH_ROWS);
+
+    const items = await repo.getInventory('tenant-1');
+
+    expect(items.every((i) => i.lotControl === undefined)).toBe(true);
   });
 });

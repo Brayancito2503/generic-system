@@ -31,7 +31,9 @@ const LEGACY_STATUS_BY_MESSAGE: ReadonlyArray<readonly [string, number]> = [
   ['Producto no encontrado', 404],
   ['Cliente no encontrado', 404],
   ['Sesión de caja no encontrada o ya cerrada', 400],
-  ['Debe abrir la caja antes de registrar una venta', 400],
+  // The tenant-wide "open the register first" message is gone: D11 replaced it
+  // with a per-branch message that names the cashier's own branch, so keeping
+  // the old key here would map a message the code can no longer emit.
   ['La venta no tiene productos', 400],
   ['Cantidad inválida en uno de los productos', 400],
   ['Uno o más productos no existen', 400],

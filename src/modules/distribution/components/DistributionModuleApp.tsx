@@ -9,6 +9,7 @@ import {
     Banknote,
     Truck,
     Users,
+    Building2,
     Receipt,
     Store,
     ShoppingCart,
@@ -29,6 +30,7 @@ import { ReceivablesView } from "./ReceivablesView";
 import { CustomersView } from "./CustomersView";
 import SuppliersView from "./SuppliersView";
 import EmployeesView from "./EmployeesView";
+import { BranchesView } from "./BranchesView";
 import TaxAndInvoicingView from "./TaxAndInvoicingView";
 import { DailyCloseReportView } from "./DailyCloseReportView";
 import TenantSettingsView from "./TenantSettingsView";
@@ -46,6 +48,7 @@ export type DistributionTab =
     | "cash"
     | "suppliers"
     | "employees"
+    | "branches"
     | "tax"
     | "reportes"
     | "settings";
@@ -78,6 +81,7 @@ export default function DistributionModuleApp() {
         { id: "cash", icon: Banknote },
         { id: "suppliers", icon: Truck },
         { id: "employees", icon: Users },
+        { id: "branches", icon: Building2 },
         { id: "tax", icon: Receipt },
         { id: "reportes", icon: FileText },
         { id: "settings", icon: Settings },
@@ -158,6 +162,7 @@ export default function DistributionModuleApp() {
                     <SuppliersView userRole={userRole} />
                 )}
                 {safeTab === "employees" && <EmployeesView />}
+                {safeTab === "branches" && <BranchesView />}
                 {safeTab === "tax" && <TaxAndInvoicingView />}
                 {safeTab === "reportes" && <DailyCloseReportView />}
                 {safeTab === "settings" && <TenantSettingsView />}

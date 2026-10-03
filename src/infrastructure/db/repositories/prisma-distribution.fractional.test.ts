@@ -11,6 +11,11 @@ import { PrismaDistributionRepository } from '@/infrastructure/db/repositories/p
 // prisma-distribution.inventory-ledger.test.ts).
 const txMocks = vi.hoisted(() => ({
   cashSessionFindFirst: vi.fn(),
+  cashSessionUpdateMany: vi.fn(),
+  // D11: registerSale derives the sale's branch from the session user's
+  // Employee record, so both sale suites carry this mock surface (R8).
+  employeeFindFirst: vi.fn(),
+  branchFindMany: vi.fn(),
   itemFindMany: vi.fn(),
   itemFindFirst: vi.fn(),
   itemUpdate: vi.fn(),
@@ -35,7 +40,12 @@ const txMocks = vi.hoisted(() => ({
 
 vi.mock('@/infrastructure/db/prisma', () => {
   const tx = {
-    cashSession: { findFirst: txMocks.cashSessionFindFirst },
+    cashSession: {
+      findFirst: txMocks.cashSessionFindFirst,
+      updateMany: txMocks.cashSessionUpdateMany,
+    },
+    employee: { findFirst: txMocks.employeeFindFirst },
+    branch: { findMany: txMocks.branchFindMany },
     item: {
       findMany: txMocks.itemFindMany,
       findFirst: txMocks.itemFindFirst,
@@ -96,6 +106,7 @@ const OPEN_SESSION = {
   status: 'OPEN',
   branchId: 'branch-1',
 };
+const BRANCH = { id: 'branch-1', tenantId: 'tenant-1', name: 'Sucursal Central' };
 
 function inventoryRow(stock: number) {
   return {
@@ -241,6 +252,13 @@ beforeEach(() => {
 
   // registerSale defaults
   txMocks.cashSessionFindFirst.mockResolvedValue(OPEN_SESSION);
+  txMocks.cashSessionUpdateMany.mockResolvedValue({ count: 1 });
+  // D11: the session user's Employee is assigned to the same branch as the open
+  // session, so the derived branch matches OPEN_SESSION.branchId.
+  txMocks.employeeFindFirst.mockResolvedValue({
+    branchId: BRANCH.id,
+    branch: BRANCH,
+  });
   txMocks.itemFindMany.mockResolvedValue([ITEM]);
   txMocks.personFindFirst.mockResolvedValue(null);
   txMocks.taxRateFindFirst.mockResolvedValue(null);

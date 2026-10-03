@@ -130,6 +130,7 @@
             "cash": "Cash Register",
             "suppliers": "Suppliers",
             "employees": "Employees",
+            "branches": "Branches",
             "tax": "Taxes",
             "reportes": "Reports",
             "settings": "Settings"
@@ -203,6 +204,29 @@
             "empty": "No customers registered.",
             "loading": "Loading customers...",
             "invalidForm": "First and last name are required.",
+            "closeError": "Close"
+        },
+        "branches": {
+            "title": "Branch Management",
+            "subtitle": "Operating locations for the distributor",
+            "newBranch": "New Branch",
+            "colName": "Branch",
+            "colAddress": "Address",
+            "noAddress": "No address",
+            "colActions": "Actions",
+            "name": "Name",
+            "address": "Address",
+            "addressPlaceholder": "City, country",
+            "createTitle": "New Branch",
+            "editTitle": "Edit Branch",
+            "edit": "Edit",
+            "save": "Save",
+            "saving": "Saving...",
+            "cancel": "Cancel",
+            "empty": "No branches registered.",
+            "loading": "Loading branches...",
+            "invalidForm": "Branch name is required.",
+            "clearAddress": "Clear address",
             "closeError": "Close"
         },
         "saleUnits": {

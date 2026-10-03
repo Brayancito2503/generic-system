@@ -115,6 +115,35 @@ export const updateEmployeeSchema = createEmployeeSchema
   .refine(hasAnyDefinedField, { message: 'No hay campos válidos para actualizar' });
 
 // ---------------------------------------------------------------------------
+// Branches
+// ---------------------------------------------------------------------------
+
+/**
+ * Branch creation. Deliberately NOT `.strict()` and deliberately without a
+ * `tenantId` key: the non-strict object strips any client-supplied tenant (Rule
+ * #1 — the tenant is server-derived) while an older client sending extra keys
+ * still succeeds instead of failing loudly on a field that was never ours.
+ */
+export const createBranchSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  address: nullableText,
+});
+
+/**
+ * Branch edit (PATCH). `undefined` = untouched, `address: null` = clear the
+ * address, `name` is trimmed and bounded. The refine rejects a body naming no
+ * editable field at all, so an empty PATCH is a 400 instead of a silent no-op
+ * write. Non-strict like the create schema, so a client-supplied `tenantId` is
+ * stripped rather than rejected.
+ */
+export const updateBranchSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    address: nullableText,
+  })
+  .refine(hasAnyDefinedField, { message: 'No hay campos válidos para actualizar' });
+
+// ---------------------------------------------------------------------------
 // Suppliers
 // ---------------------------------------------------------------------------
 
@@ -359,8 +388,13 @@ export const payReceivableSchema = z.object({
 // Cash register
 // ---------------------------------------------------------------------------
 
+/**
+ * Cash register open. `branchId` is GONE on purpose (D11): the register's branch
+ * is derived server-side from the session user's `Employee` record, so keeping
+ * the field would be a lie. The object stays non-strict, so an older client that
+ * still sends `branchId` keeps working — the key is simply dropped.
+ */
 export const openCashSessionSchema = z.object({
-  branchId: idString.optional(),
   openingAmount: nonNegativeNumber,
   employeeId: nullableText,
 });

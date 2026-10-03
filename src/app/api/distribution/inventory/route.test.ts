@@ -43,6 +43,7 @@ const active = (role: string) => ({ tenantId: 'tenant-1', role, userId: 'user_1'
 const ITEM: InventoryStockItem = {
   id: 'item_1',
   tenantId: 'tenant-1',
+  branchId: 'branch_1',
   sku: 'SKU-1',
   name: 'Proteína 5lb',
   description: null,

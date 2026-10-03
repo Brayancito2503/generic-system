@@ -130,6 +130,7 @@
             "cash": "Caja",
             "suppliers": "Proveedores",
             "employees": "Empleados",
+            "branches": "Sucursales",
             "tax": "Impuestos",
             "reportes": "Reportes",
             "settings": "Ajustes"
@@ -203,6 +204,29 @@
             "empty": "No hay clientes registrados.",
             "loading": "Cargando clientes...",
             "invalidForm": "Nombre y apellido son obligatorios.",
+            "closeError": "Cerrar"
+        },
+        "branches": {
+            "title": "Gestión de Sucursales",
+            "subtitle": "Puntos de operación de la distribuidora",
+            "newBranch": "Nueva Sucursal",
+            "colName": "Sucursal",
+            "colAddress": "Dirección",
+            "noAddress": "Sin dirección",
+            "colActions": "Acciones",
+            "name": "Nombre",
+            "address": "Dirección",
+            "addressPlaceholder": "Ciudad, país",
+            "createTitle": "Nueva Sucursal",
+            "editTitle": "Editar Sucursal",
+            "edit": "Editar",
+            "save": "Guardar",
+            "saving": "Guardando...",
+            "cancel": "Cancelar",
+            "empty": "No hay sucursales registradas.",
+            "loading": "Cargando sucursales...",
+            "invalidForm": "El nombre de la sucursal es obligatorio.",
+            "clearAddress": "Borrar dirección",
             "closeError": "Cerrar"
         },
         "saleUnits": {

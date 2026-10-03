@@ -7,10 +7,12 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import type {
   IDistributionRepository,
+  CreateBranchInput,
   CreateInventoryItemInput,
   UpdateInventoryItemInput,
   CreateSupplierInput,
   UpdateSupplierInput,
+  UpdateBranchInput,
   CreateEmployeeInput,
   CreateCustomerInput,
   UpdateCustomerInput,
@@ -32,6 +34,7 @@ import type {
 } from '@/core/ports/distribution-repository.port';
 import type {
   AccessRole,
+  BranchEntity,
   CashMovementEntity,
   CashSessionEntity,
   CustomerLight,
@@ -251,9 +254,201 @@ function firstBranchOfTenant(tenantId: string, branchId?: string) {
   return prisma.branch.findFirst({ where: { tenantId }, orderBy: { createdAt: 'asc' } });
 }
 
+/**
+ * The branch a cash session operates on is DERIVED, never named (D11). The chain
+ * rides existing indexes — `User.id` is the PK and both `User.personId` and
+ * `Employee.personId` are `@unique` — so this needs no migration.
+ *
+ * Takes the three models it touches so the SAME helper serves `prisma` (the
+ * cash-register open) and the `tx` of `registerSale`'s transaction.
+ */
+type DerivedBranchDb = Pick<Prisma.TransactionClient, 'employee' | 'branch'>;
+
+/** The branch plus its display name, used verbatim in the failure messages. */
+/**
+ * Assembled inside the transaction, read outside it. Passing the value to a
+ * helper rather than reading `.firstName` inline is what keeps it typed: a `let`
+ * assigned only within the transaction closure narrows to `never` at the read
+ * site, which TypeScript is correct about and unhelpful about.
+ */
+function formatCustomerName(
+  customer: { firstName: string; lastName: string } | null
+): string | null {
+  return customer ? `${customer.firstName} ${customer.lastName}` : null;
+}
+
+interface DerivedBranch {
+  id: string;
+  name: string;
+}
+
+/**
+ * D11 steps 1-2. Resolves the session user's branch, or refuses.
+ *
+ * Step 1 walks `userId -> User.personId -> Employee.branchId`. Step 2 runs ONLY
+ * when step 1 yielded nothing, so the happy path stays at one query:
+ *   - no `Employee` row, or an `Employee` whose `branchId` is NULL -> fall back;
+ *   - exactly one tenant branch -> use it (single-branch tenants are unchanged);
+ *   - two or more -> REFUSE. Silently taking the earliest branch is the
+ *     wrong-branch risk this whole mechanism exists to remove;
+ *   - zero -> the pre-existing "no branches configured" 400.
+ */
+async function deriveSaleBranch(
+  db: DerivedBranchDb,
+  tenantId: string,
+  userId: string
+): Promise<DerivedBranch> {
+  const employee = await db.employee.findFirst({
+    where: {
+      // Rule #1: the tenant is the session tenant, never a client value.
+      tenantId,
+      // `is` is REQUIRED on the optional to-one `Person.user` (schema:129-130)
+      // and accepted on the required `Employee.person` (schema:377).
+      person: { is: { user: { is: { id: userId } } } },
+      // Rule #1 again, and load-bearing: `Employee.branchId` has NO foreign key
+      // to `Branch.tenantId` (schema:378-379 references `Branch.id` only), so an
+      // employee could name another tenant's branch. Filtering the RELATION here
+      // is what guarantees no branch of tenant B is ever read. `branchId: null`
+      // also matches, because "employee with no branch" is a legitimate shape
+      // that collapses into the step-2 fallback.
+      OR: [{ branchId: null }, { branch: { is: { tenantId } } }],
+    },
+    select: { branchId: true, branch: { select: { id: true, name: true } } },
+  });
+
+  if (employee?.branch) {
+    return { id: employee.branch.id, name: employee.branch.name };
+  }
+
+  const branches = await db.branch.findMany({
+    where: { tenantId },
+    select: { id: true, name: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  if (branches.length === 0) {
+    throw new ApiError(400, 'El tenant no tiene sucursales configuradas');
+  }
+  if (branches.length > 1) {
+    throw new ApiError(
+      400,
+      'No se puede determinar la sucursal de la venta: asigna una sucursal al cajero o deja una sola sucursal'
+    );
+  }
+  return branches[0];
+}
+
 export class PrismaDistributionRepository implements IDistributionRepository {
+  // ─── Branches ──────────────────────────────────────────────────────────────
+  /**
+   * Branches of the tenant, oldest first. The read is tenant-scoped in the
+   * `where` (Rule #1): `Branch.tenantId` has a FK to Tenant, but the filter is
+   * still explicit so a future relation join can never widen the result set.
+   */
+  async listBranches(tenantId: string): Promise<BranchEntity[]> {
+    const rows = await prisma.branch.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return rows.map((b) => ({
+      id: b.id,
+      tenantId: b.tenantId,
+      name: b.name,
+      address: b.address,
+      createdAt: b.createdAt,
+    }));
+  }
+
+  /**
+   * Creates a branch explicitly for the session tenant. The tenant comes from
+   * the repository argument, NEVER from the input: there is no `tenantId` key
+   * on `CreateBranchInput`, so the client has nothing to spoof even if Zod is
+   * bypassed. No delete counterpart by design.
+   */
+  async createBranch(
+    tenantId: string,
+    input: CreateBranchInput
+  ): Promise<BranchEntity> {
+    const created = await prisma.branch.create({
+      data: {
+        tenantId,
+        name: input.name,
+        address: input.address ?? null,
+      },
+    });
+
+    // A new branch inherits NO stock (distribution-branches R3). Materializing a
+    // zero-quantity `Inventory` row per existing product is what makes that a
+    // database fact instead of an absence: a branch-scoped read reports 0 rather
+    // than "unknown", and no write path can fall through to another branch's
+    // row. `minAlert: 0` on purpose — with the column default of 5 every
+    // product at the new branch would immediately report as low stock and
+    // pollute the dashboard's low-stock count with phantom alerts.
+    const items = await prisma.item.findMany({
+      where: { tenantId },
+      select: { id: true },
+    });
+    if (items.length > 0) {
+      await prisma.inventory.createMany({
+        data: items.map((item) => ({
+          tenantId,
+          itemId: item.id,
+          branchId: created.id,
+          stock: new Prisma.Decimal(0),
+          minAlert: 0,
+        })),
+      });
+    }
+
+    return {
+      id: created.id,
+      tenantId: created.tenantId,
+      name: created.name,
+      address: created.address,
+      createdAt: created.createdAt,
+    };
+  }
+
+  /**
+   * Partial edit of a branch. The lookup is tenant-scoped FIRST (Rule #1), so a
+   * branch id owned by another tenant is indistinguishable from a missing one —
+   * 404, never that branch's data. Only the fields the caller actually defined
+   * reach `data`: `undefined` is left out entirely instead of being coerced to
+   * null, which is what makes "omitted fields stay untouched" true.
+   */
+  async updateBranch(
+    tenantId: string,
+    branchId: string,
+    input: UpdateBranchInput
+  ): Promise<BranchEntity> {
+    const existing = await prisma.branch.findFirst({
+      where: { id: branchId, tenantId },
+    });
+    if (!existing) {
+      throw new ApiError(404, 'Sucursal no encontrada');
+    }
+
+    const data: { name?: string; address?: string | null } = {};
+    if (input.name !== undefined) data.name = input.name;
+    // `undefined` = untouched; null = clear the address; '' normalizes to null.
+    if (input.address !== undefined) data.address = input.address;
+
+    const updated = await prisma.branch.update({
+      where: { id: existing.id },
+      data,
+    });
+
+    return {
+      id: updated.id,
+      tenantId: updated.tenantId,
+      name: updated.name,
+      address: updated.address,
+      createdAt: updated.createdAt,
+    };
+  }
+
   // ─── Dashboard ─────────────────────────────────────────────────────────────
-  async getDashboard(tenantId: string): Promise<DistributionDashboardStats> {
+  async getDashboard(tenantId: string, userId: string): Promise<DistributionDashboardStats> {
     const now = new Date();
     const startOfToday = new Date(
       now.getFullYear(),
@@ -333,7 +528,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       where: { tenantId, isActive: true },
     });
 
-    const cashSession = await this.getOpenCashSession(tenantId);
+    const cashSession = await this.findOpenCashSessionForUser(tenantId, userId);
     const movementsSum =
       cashSession?.movements.reduce(
         (acc, m) => (m.type === 'IN' ? acc + m.amount : acc - m.amount),
@@ -488,8 +683,12 @@ export class PrismaDistributionRepository implements IDistributionRepository {
 
     const unitsSold30d = await this.getUnitsSoldLast30d(tenantId);
     const items = rows.map((row) => ({
+      // `id` stays the PRODUCT id: every catalog mutation (PATCH/DELETE
+      // /inventory/[id]) resolves the item, not the stock row. The stock row is
+      // identified by (id, branchId) instead — see InventoryStockItem.
       id: row.item.id,
       tenantId: row.tenantId,
+      branchId: row.branchId,
       sku: row.item.sku,
       name: row.item.name,
       description: row.item.description,
@@ -499,7 +698,9 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       minAlert: row.minAlert,
       isLowStock: row.stock.toNumber() < row.minAlert,
       saleUnit: row.item.saleUnit ?? null,
-      // Never-sold products are absent from the aggregate: they score 0.
+      // Never-sold products are absent from the aggregate: they score 0. The
+      // score is per PRODUCT, so both branch rows of one product read the same
+      // number and are ranked as a single entry, not as two.
       unitsSold30d: unitsSold30d.get(row.item.id)?.toNumber() ?? 0,
     }));
 
@@ -508,7 +709,10 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       // ranking by the aggregate alone gives the required "30-day units desc,
       // ties by Item.name asc" and pushes never-sold products (0, and sale
       // quantities are always positive) to the end — no second round-trip and
-      // no locale-dependent string comparison.
+      // no locale-dependent string comparison. Two branch rows of the same
+      // product tie on velocity and therefore stay adjacent and in name order:
+      // storing a product in two branches never inflates its rank past a
+      // genuinely faster mover.
       const zero = new Prisma.Decimal(0);
       items.sort(
         (a, b) =>
@@ -584,6 +788,9 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     return {
       id: item.id,
       tenantId,
+      // The product lands in exactly one branch (the tenant's first), so the
+      // created stock row names it explicitly.
+      branchId: inv.branchId,
       sku: item.sku,
       name: item.name,
       description: item.description,
@@ -644,7 +851,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
 
     // minAlert stays branch-scoped: it touches ONLY the targeted branch's
     // Inventory row, and still requires the branchId guard below.
-    let inv: { stock: Prisma.Decimal; minAlert: number } | null =
+    let inv: { stock: Prisma.Decimal; minAlert: number; branchId: string } | null =
       existing.inventory[0] ?? null;
     if (input.branchId !== undefined) {
       const branch = await prisma.branch.findFirst({
@@ -686,6 +893,10 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     return {
       id: item.id,
       tenantId,
+      // The stock row this response actually reflects: the branch the caller
+      // targeted, else the product's first stock row (catalog-only edit), else
+      // '' for a product that has no stock row at all.
+      branchId: input.branchId ?? inv?.branchId ?? '',
       sku: item.sku,
       name: item.name,
       description: item.description,
@@ -1405,10 +1616,50 @@ export class PrismaDistributionRepository implements IDistributionRepository {
   }
 
   // ─── Cash ───────────────────────────────────────────────────────────────────
-  async getOpenCashSession(tenantId: string): Promise<CashSessionEntity | null> {
+  async getOpenCashSession(
+    tenantId: string,
+    userId: string
+  ): Promise<CashSessionEntity | null> {
+    // D11: the register a user sees is the one at THEIR branch, resolved the same
+    // way a sale resolves it — otherwise the UI could show branch A's register
+    // while the sale decrements branch B's stock. Derivation is strict here, so
+    // an unresolvable branch answers with the actionable 400 rather than a null
+    // that looks like "no register open".
+    const branch = await deriveSaleBranch(prisma, tenantId, userId);
+    return this.loadOpenCashSession(tenantId, branch.id);
+  }
+
+  /**
+   * The dashboard is a tenant-wide read, and its viewer is not necessarily a
+   * cashier: a TENANT_ADMIN with no `Employee` row has no derivable branch, which
+   * must not fail the whole page. For that reader the register panel is simply
+   * empty. Only the cash endpoints keep the strict 400, because only there is the
+   * message the operator acts on.
+   */
+  private async findOpenCashSessionForUser(
+    tenantId: string,
+    userId: string
+  ): Promise<CashSessionEntity | null> {
+    let branch: DerivedBranch | null = null;
+    try {
+      branch = await deriveSaleBranch(prisma, tenantId, userId);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 400) return null;
+      throw error;
+    }
+    return this.loadOpenCashSession(tenantId, branch.id);
+  }
+
+  private async loadOpenCashSession(
+    tenantId: string,
+    branchId: string
+  ): Promise<CashSessionEntity | null> {
     const session = await prisma.cashSession.findFirst({
-      where: { tenantId, status: 'OPEN' },
-      orderBy: { openedAt: 'desc' },
+      where: { tenantId, branchId, status: 'OPEN' },
+      // No `orderBy`, for the same reason the sale path has none: M5's partial
+      // unique index makes (tenantId, branchId) WHERE status='OPEN' hold at most
+      // one row, so the answer is unique by construction. A sort here would hide
+      // a dropped index instead of surfacing it.
       include: {
         movements: { orderBy: { createdAt: 'desc' } },
         employee: { include: { person: true } },
@@ -1455,19 +1706,21 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     tenantId: string,
     input: OpenCashSessionInput
   ): Promise<CashSessionEntity> {
-    // Single open-session guard: a second OPEN session for the tenant is a
-    // conflict (409); the routes surface this code as-is.
+    // D11: the branch comes from the session user's Employee record, never from
+    // the request body — `OpenCashSessionInput` no longer has a `branchId`.
+    const branch = await deriveSaleBranch(prisma, tenantId, input.userId);
+
+    // Single open-session guard, now PER BRANCH: a second OPEN session for THIS
+    // branch is a conflict (409), while another branch of the same tenant opens
+    // its own register freely. The database backstop is M5's partial unique
+    // index `CashSession_one_open_per_branch`, so a concurrent open cannot slip
+    // past this application check.
     const alreadyOpen = await prisma.cashSession.findFirst({
-      where: { tenantId, status: 'OPEN' },
+      where: { tenantId, branchId: branch.id, status: 'OPEN' },
+      select: { id: true },
     });
     if (alreadyOpen) {
       throw new ApiError(409, 'Ya existe una sesión de caja abierta');
-    }
-
-    const branch =
-      (await firstBranchOfTenant(tenantId, input.branchId || undefined)) ?? null;
-    if (!branch) {
-      throw new ApiError(400, 'El tenant no tiene sucursales configuradas');
     }
 
     const session = await prisma.cashSession.create({
@@ -1958,43 +2211,86 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       quantity,
     }));
 
-    const openSession = await prisma.cashSession.findFirst({
-      where: { tenantId, status: 'OPEN' },
-    });
-    if (!openSession) {
-      throw new ApiError(400, 'Debe abrir la caja antes de registrar una venta');
-    }
-    const branchId = openSession.branchId;
-
-    const items = await prisma.item.findMany({
-      where: { tenantId, id: { in: lines.map((l) => l.itemId) } },
-    });
-    if (items.length !== lines.length) {
-      throw new ApiError(400, 'Uno o más productos no existen');
-    }
-    const itemById = new Map(items.map((i) => [i.id, i] as const));
-
+    // D11: the branch the sale moves stock in, and the register the sale is
+    // attributed to, are the same fact — both derived from the session user's
+    // Employee record. Steps 1-4 below run INSIDE the transaction, as its first
+    // statements: resolving them out here would let the stock writes be
+    // authorized by a fact that is invalidated before they commit.
+    // Declared out here and assigned inside the transaction: the entity built from
+    // `saleResult` below is assembled after the transaction resolves.
     let customer: { firstName: string; lastName: string } | null = null;
-    if (input.personId) {
-      customer = await prisma.person.findFirst({
-        where: { tenantId, id: input.personId },
-        select: { firstName: true, lastName: true },
-      });
-      if (!customer) throw new ApiError(404, 'Cliente no encontrado');
-    }
-
-    const defaultTax =
-      (await prisma.taxRate.findFirst({
-        where: { tenantId, isDefault: true, isActive: true },
-        orderBy: { createdAt: 'asc' },
-      })) ??
-      (await prisma.taxRate.findFirst({
-        where: { tenantId, isInclusive: true, isActive: true },
-        orderBy: { createdAt: 'asc' },
-      }));
-    const taxRatePct = defaultTax?.rate.toNumber() ?? 0;
 
     const saleResult = await prisma.$transaction(async (tx) => {
+      // Step 1-2 — derive the branch from the session user, with a
+      // single-branch fallback and a refusal when the guess would be arbitrary.
+      const branch = await deriveSaleBranch(tx, tenantId, input.userId);
+      const branchId = branch.id;
+
+      // Step 3 — the lookup that replaced the unordered tenant-wide findFirst.
+      // No `orderBy` on purpose: M5's partial unique index holds at most one OPEN
+      // row per (tenantId, branchId), so the result is unique by construction and
+      // a sort would only disguise that guarantee.
+      const openSession = await tx.cashSession.findFirst({
+        where: { tenantId, branchId, status: 'OPEN' },
+        select: { id: true, branchId: true, notes: true },
+      });
+      if (!openSession) {
+        throw new ApiError(
+          400,
+          `Debe abrir la caja en la sucursal «${branch.name}» antes de registrar una venta`
+        );
+      }
+
+      // Step 4 — claim the session as the FIRST write of the transaction. The
+      // lock, not the value, is the point: it holds a row lock until commit, so
+      // a concurrent close or movement on that row blocks. `closeCashSession` is
+      // not transactional, so moving the read in here is necessary but NOT
+      // sufficient on its own — without this guarded write the sale could still
+      // be attributed to a register that closed mid-flight. `count === 0` means
+      // it closed between steps 3 and 4, so no stock moves at all.
+      // `CashSession` has no `updatedAt`, so the idempotent `notes` self-write is
+      // the cheapest existing-column no-op; this repo uses no raw SQL, which is
+      // why it is a guarded `updateMany` rather than `SELECT … FOR UPDATE`.
+      const claim = await tx.cashSession.updateMany({
+        where: { id: openSession.id, tenantId, branchId, status: 'OPEN' },
+        data: { notes: openSession.notes },
+      });
+      if (claim.count === 0) {
+        throw new ApiError(
+          400,
+          `La caja de «${branch.name}» se cerró mientras se registraba la venta`
+        );
+      }
+
+      // Reads, not writes — order is irrelevant to the claim, which is already
+      // the transaction's first write and holds its row lock until commit.
+      const items = await tx.item.findMany({
+        where: { tenantId, id: { in: lines.map((l) => l.itemId) } },
+      });
+      if (items.length !== lines.length) {
+        throw new ApiError(400, 'Uno o más productos no existen');
+      }
+      const itemById = new Map(items.map((i) => [i.id, i] as const));
+
+      if (input.personId) {
+        customer = await tx.person.findFirst({
+          where: { tenantId, id: input.personId },
+          select: { firstName: true, lastName: true },
+        });
+        if (!customer) throw new ApiError(404, 'Cliente no encontrado');
+      }
+
+      const defaultTax =
+        (await tx.taxRate.findFirst({
+          where: { tenantId, isDefault: true, isActive: true },
+          orderBy: { createdAt: 'asc' },
+        })) ??
+        (await tx.taxRate.findFirst({
+          where: { tenantId, isInclusive: true, isActive: true },
+          orderBy: { createdAt: 'asc' },
+        }));
+      const taxRatePct = defaultTax?.rate.toNumber() ?? 0;
+
       // Decimal multiplication per line: fraction × price stays exact and the
       // money columns (Decimal(10,2)) receive the true two-decimal value.
       const subtotal = lines.reduce((acc, l) => {
@@ -2139,9 +2435,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       tenantId: saleResult.tenantId,
       cashSessionId: saleResult.cashSessionId,
       personId: saleResult.personId,
-      customerName: customer
-        ? `${customer.firstName} ${customer.lastName}`
-        : null,
+      customerName: formatCustomerName(customer),
       subtotal: saleResult.subtotal.toNumber(),
       taxAmount: saleResult.taxAmount.toNumber(),
       discount: saleResult.discount.toNumber(),

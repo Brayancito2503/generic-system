@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { Package, Search, Plus, AlertTriangle, TrendingUp, TrendingDown, Edit2, X, Loader2, Trash2, ClipboardCheck, History } from 'lucide-react';
 import type { InventoryStockItem, InventorySort, PurchaseOrderEntity, CashSessionEntity } from '../entities';
+import type { CreateInventoryItemInput } from '@/core/ports/distribution-repository.port';
 import { apiGet, apiSend } from '../api';
 import { isCashier, isAccountant, hasFullAccess } from '../lib/roles';
 import { saleUnitSuffix } from '../lib/sale-units';
@@ -87,7 +88,10 @@ export function InventoryView({ userRole }: { userRole?: string | null }) {
   const branchId = orders.find((o) => o.branchId)?.branchId ?? cashSession?.branchId ?? '';
 
   const createMutation = useMutation({
-    mutationFn: (payload: Omit<InventoryStockItem, 'id' | 'tenantId' | 'isLowStock'>) =>
+    // The wire payload is the port's create input minus the server-derived
+    // `userId`: an alta opens its own branch-scoped stock row server-side, so
+    // the client cannot (and must not) name a branch here.
+    mutationFn: (payload: Omit<CreateInventoryItemInput, 'userId'>) =>
       apiSend<InventoryStockItem>(`/inventory`, 'POST', payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['inventory'] });

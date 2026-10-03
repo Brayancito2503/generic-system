@@ -21,6 +21,23 @@ export type AccessRole = 'CASHIER' | 'ACCOUNTANT' | 'MANAGER';
  */
 export type ItemSaleUnit = 'UNIDAD' | 'LIBRA' | 'KILOGRAMO';
 
+/**
+ * Physical point of sale of a tenant. Today every tenant is born with exactly
+ * one branch at provisioning; this entity is what makes a second one a managed
+ * record instead of an implicit fallback.
+ *
+ * `address` is free text and nullable (a branch with no address is valid, and a
+ * PATCH with `address: null` clears it). There is deliberately no delete: a
+ * branch that carries purchase orders or cash sessions must keep its history.
+ */
+export interface BranchEntity {
+  id: string;
+  tenantId: string;
+  name: string;
+  address?: string | null;
+  createdAt: Date;
+}
+
 export interface SupplierEntity {
   id: string;
   tenantId: string;
@@ -235,9 +252,21 @@ export type InventorySort = 'name' | 'velocity';
 export interface InventoryStockItem {
   id: string;
   tenantId: string;
+  /**
+   * Branch this stock row belongs to. `Inventory` is uniquely keyed by
+   * (tenantId, itemId, branchId), so the SAME product stocked at two branches
+   * is two rows that share `id` and differ HERE — this is what makes a row
+   * branch-explicit instead of an anonymous duplicate.
+   */
+  branchId: string;
   sku?: string | null;
   name: string;
   description?: string | null;
+  /**
+   * Unit cost. Still the item-level catalog cost: the per-branch cost model
+   * (`ItemBranchCost`, migration M1) lands in a later slice, and no branch cost
+   * column exists to read yet.
+   */
   cost: number;
   price: number;
   stock: number;
@@ -255,6 +284,13 @@ export interface InventoryStockItem {
    * it instead of reporting a misleading 0 for an existing product.
    */
   unitsSold30d?: number;
+  /**
+   * Per-product lot control flag. Optional and not yet read: the
+   * `Item.lotControl` column lands with the `Lot` model, so until then this
+   * stays undefined rather than defaulting to a value that would claim a
+   * product is (or isn't) lot-controlled when the schema cannot say.
+   */
+  lotControl?: boolean | null;
 }
 
 // ─── Inventory ledger (kardex) ───────────────────────────────────────────────
