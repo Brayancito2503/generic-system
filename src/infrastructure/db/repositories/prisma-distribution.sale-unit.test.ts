@@ -27,6 +27,10 @@ const txMocks = vi.hoisted(() => ({
   inventoryFindFirst: vi.fn(),
   inventoryUpdateMany: vi.fn(),
   inventoryMovementCreate: vi.fn(),
+  // S2b: branch-scoped cost reads/writes.
+  itemBranchCostFindMany: vi.fn(),
+  itemBranchCostFindUnique: vi.fn(),
+  itemBranchCostUpsert: vi.fn(),
   cashSessionFindFirst: vi.fn(),
   cashSessionUpdateMany: vi.fn(),
   personFindFirst: vi.fn(),
@@ -52,6 +56,13 @@ vi.mock('@/infrastructure/db/prisma', () => {
       updateMany: txMocks.inventoryUpdateMany,
     },
     inventoryMovement: { create: txMocks.inventoryMovementCreate },
+    // S2b: the alta seeds the branch cost and the sale snapshots the SELLING
+    // branch's cost.
+    itemBranchCost: {
+      findMany: txMocks.itemBranchCostFindMany,
+      findUnique: txMocks.itemBranchCostFindUnique,
+      upsert: txMocks.itemBranchCostUpsert,
+    },
     cashSession: {
       findFirst: txMocks.cashSessionFindFirst,
       updateMany: txMocks.cashSessionUpdateMany,
@@ -193,6 +204,11 @@ beforeEach(() => {
   txMocks.itemCreate.mockResolvedValue(createdItemRow('LIBRA'));
   txMocks.inventoryCreate.mockResolvedValue(createdInventoryRow(100));
   txMocks.inventoryMovementCreate.mockResolvedValue(movementRow(100, 'INITIAL', null));
+  // S2b: no branch cost rows → the alta seeds one and the sale snapshot falls
+  // back to the frozen `Item.cost` seed, i.e. the pre-S2b numbers.
+  txMocks.itemBranchCostFindMany.mockResolvedValue([]);
+  txMocks.itemBranchCostFindUnique.mockResolvedValue(null);
+  txMocks.itemBranchCostUpsert.mockResolvedValue({});
 
   // registerSale defaults
   txMocks.cashSessionFindFirst.mockResolvedValue(OPEN_SESSION);

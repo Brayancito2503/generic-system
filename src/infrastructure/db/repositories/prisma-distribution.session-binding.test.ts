@@ -30,6 +30,12 @@ const dbMocks = vi.hoisted(() => ({
   saleCounterUpsert: vi.fn(),
   inventoryUpdateMany: vi.fn(),
   inventoryMovementCreate: vi.fn(),
+  // S2b: branch-scoped cost reads/writes. No rows by default, so the sale
+  // snapshot falls back to the frozen `Item.cost` seed and the D11 assertions
+  // below are unchanged by the reroute.
+  itemBranchCostFindMany: vi.fn(),
+  itemBranchCostFindUnique: vi.fn(),
+  itemBranchCostUpsert: vi.fn(),
   saleCreate: vi.fn(),
   receivableCreate: vi.fn(),
   userFindFirst: vi.fn(),
@@ -54,6 +60,12 @@ vi.mock('@/infrastructure/db/prisma', () => {
     saleCounter: { upsert: dbMocks.saleCounterUpsert },
     inventory: { updateMany: dbMocks.inventoryUpdateMany },
     inventoryMovement: { create: dbMocks.inventoryMovementCreate },
+    // S2b: registerSale snapshots the SELLING (derived) branch's cost.
+    itemBranchCost: {
+      findMany: dbMocks.itemBranchCostFindMany,
+      findUnique: dbMocks.itemBranchCostFindUnique,
+      upsert: dbMocks.itemBranchCostUpsert,
+    },
     sale: { create: dbMocks.saleCreate },
     receivable: { create: dbMocks.receivableCreate },
     user: { findFirst: dbMocks.userFindFirst },
@@ -178,6 +190,10 @@ beforeEach(() => {
   dbMocks.taxRateFindFirst.mockResolvedValue(null);
   dbMocks.saleCounterUpsert.mockResolvedValue({ lastNumber: 1 });
   dbMocks.inventoryUpdateMany.mockResolvedValue({ count: 1 });
+  // S2b: no branch cost row for branch B → the SaleItem snapshot falls back to
+  // the frozen `Item.cost` seed, so every D11 assertion is unchanged.
+  dbMocks.itemBranchCostFindMany.mockResolvedValue([]);
+  dbMocks.itemBranchCostFindUnique.mockResolvedValue(null);
   dbMocks.saleCreate.mockResolvedValue(createdSale());
 });
 

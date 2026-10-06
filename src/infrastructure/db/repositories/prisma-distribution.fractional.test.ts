@@ -26,6 +26,11 @@ const txMocks = vi.hoisted(() => ({
   inventoryUpdate: vi.fn(),
   inventoryUpdateMany: vi.fn(),
   inventoryMovementCreate: vi.fn(),
+  // S2b: the receive averages into the RECEIVING branch and the sale snapshots
+  // the SELLING branch's cost.
+  itemBranchCostFindMany: vi.fn(),
+  itemBranchCostFindUnique: vi.fn(),
+  itemBranchCostUpsert: vi.fn(),
   userFindFirst: vi.fn(),
   purchaseOrderFindFirst: vi.fn(),
   purchaseOrderUpdate: vi.fn(),
@@ -60,6 +65,11 @@ vi.mock('@/infrastructure/db/prisma', () => {
       updateMany: txMocks.inventoryUpdateMany,
     },
     inventoryMovement: { create: txMocks.inventoryMovementCreate },
+    itemBranchCost: {
+      findMany: txMocks.itemBranchCostFindMany,
+      findUnique: txMocks.itemBranchCostFindUnique,
+      upsert: txMocks.itemBranchCostUpsert,
+    },
     user: { findFirst: txMocks.userFindFirst },
     purchaseOrder: {
       findFirst: txMocks.purchaseOrderFindFirst,
@@ -272,6 +282,11 @@ beforeEach(() => {
   txMocks.itemFindFirst.mockResolvedValue(ITEM);
   txMocks.inventoryFindFirst.mockResolvedValue(inventoryRow(0));
   txMocks.itemUpdate.mockResolvedValue({ ...ITEM, cost: decimal(25) });
+  // S2b: no branch cost row for branch-1, so the receive falls back to the
+  // frozen `Item.cost` seed and the sale snapshot does too.
+  txMocks.itemBranchCostFindMany.mockResolvedValue([]);
+  txMocks.itemBranchCostFindUnique.mockResolvedValue(null);
+  txMocks.itemBranchCostUpsert.mockResolvedValue({});
   txMocks.inventoryUpdate.mockResolvedValue(inventoryRow(3.75));
   txMocks.purchaseOrderItemUpdateMany.mockResolvedValue({ count: 1 });
   txMocks.purchaseOrderItemFindMany.mockResolvedValue([]);
@@ -396,11 +411,26 @@ describe('receivePurchaseOrder — fractional receives on Decimal remainders', (
       userId: 'user_1',
     });
 
-    // First arrival (stock 0): weighted-avg cost adopts the PO line cost (25).
-    expect(txMocks.itemUpdate).toHaveBeenCalledWith({
-      where: { id: 'item_1' },
-      data: { cost: decimal(25) },
+    // First arrival (stock 0): the RECEIVING branch adopts the PO line cost
+    // (25). S2b: this lands in ItemBranchCost, and the tenant-wide Item.cost
+    // write that used to carry it is gone — `itemUpdate` is never called here.
+    expect(txMocks.itemBranchCostUpsert).toHaveBeenCalledWith({
+      where: {
+        tenantId_itemId_branchId: {
+          tenantId: 'tenant-1',
+          itemId: 'item_1',
+          branchId: 'branch-1',
+        },
+      },
+      create: {
+        tenantId: 'tenant-1',
+        itemId: 'item_1',
+        branchId: 'branch-1',
+        cost: decimal(25),
+      },
+      update: { cost: decimal(25) },
     });
+    expect(txMocks.itemUpdate).not.toHaveBeenCalled();
     expect(txMocks.inventoryUpdate).toHaveBeenCalledWith({
       where: { id: 'inv_1' },
       data: { stock: { increment: decimal(3.75) } },

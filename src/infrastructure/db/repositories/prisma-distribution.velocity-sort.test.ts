@@ -14,12 +14,25 @@ import { PrismaDistributionRepository } from '@/infrastructure/db/repositories/p
 // prisma-distribution.sale-unit.test.ts / fractional.test.ts).
 const dbMocks = vi.hoisted(() => ({
   inventoryFindMany: vi.fn(),
+  // S2b: branch-scoped cost reads. Empty by default, which is the pre-M1 /
+  // first-arrival case — `getInventory` then reports the frozen `Item.cost`
+  // seed, so every ranking assertion below is unchanged by S2b.
+  itemBranchCostFindMany: vi.fn(),
+  itemBranchCostFindUnique: vi.fn(),
+  itemBranchCostUpsert: vi.fn(),
   saleItemGroupBy: vi.fn(),
 }));
 
 vi.mock('@/infrastructure/db/prisma', () => ({
   prisma: {
     inventory: { findMany: dbMocks.inventoryFindMany },
+    // S2b: `getInventory` reads branch-scoped costs, one query per branch.
+    // Empty by default → the frozen `Item.cost` seed is reported.
+    itemBranchCost: {
+      findMany: dbMocks.itemBranchCostFindMany,
+      findUnique: dbMocks.itemBranchCostFindUnique,
+      upsert: dbMocks.itemBranchCostUpsert,
+    },
     saleItem: { groupBy: dbMocks.saleItemGroupBy },
   },
 }));
@@ -70,6 +83,9 @@ const namesOf = (items: Awaited<ReturnType<typeof repo.getInventory>>) =>
 beforeEach(() => {
   vi.clearAllMocks();
   dbMocks.inventoryFindMany.mockResolvedValue(ROWS);
+  // S2b: no branch cost rows → `getInventory` reports the frozen catalog seed.
+  dbMocks.itemBranchCostFindMany.mockResolvedValue([]);
+  dbMocks.itemBranchCostFindUnique.mockResolvedValue(null);
   // Default: only Arroz Oro sold anything in the window.
   dbMocks.saleItemGroupBy.mockResolvedValue([
     { itemId: 'item_2', _sum: { quantity: decimal(30) } },
@@ -301,15 +317,39 @@ describe('getInventory — branch-explicit rows (S1a)', () => {
     ]);
   });
 
-  it('reports cost from the catalog while the branch cost model is still unbuilt', async () => {
-    // `ItemBranchCost` (M1) lands in S2a, so `cost` here is still the item-level
-    // catalog cost. Pinning it keeps S1a honest instead of inventing a
-    // per-branch cost column that does not exist.
+  it('reports the frozen catalog seed for a branch with no ItemBranchCost row yet', async () => {
+    // S2b reroutes `cost` through the branch-scoped accessor, which falls back
+    // to `Item.cost` when the pair has no row. That is the state of every pair
+    // before M1 is applied and of every first arrival after it, so the pre-S2b
+    // numbers are pinned here deliberately: the fallback must not move them.
     dbMocks.inventoryFindMany.mockResolvedValue(MULTI_BRANCH_ROWS);
 
     const items = await repo.getInventory('tenant-1');
 
     expect(items.map((i) => i.cost)).toEqual([30, 30, 30]);
+  });
+
+  it('reports each branch its own cost once the rows exist', async () => {
+    // Aceite is priced at both branches; Arroz has no row yet and falls back to
+    // its frozen seed. Three rows in, three distinct answers out.
+    dbMocks.inventoryFindMany.mockResolvedValue(MULTI_BRANCH_ROWS);
+    dbMocks.itemBranchCostFindMany.mockImplementation(
+      async ({ where }: { where: { branchId: string; itemId: { in: string[] } } }) =>
+        where.itemId.in
+          .filter((id: string) => id === 'item_1')
+          .map((id: string) => ({
+            itemId: id,
+            cost: decimal(where.branchId === 'branch-2' ? 41 : 30),
+          }))
+    );
+
+    const items = await repo.getInventory('tenant-1');
+
+    expect(items.map((i) => `${i.branchId}:${i.cost}`)).toEqual([
+      'branch-1:30',
+      'branch-2:41',
+      'branch-1:30',
+    ]);
   });
 
   it('leaves lotControl undefined until the Item column lands in S3a', async () => {

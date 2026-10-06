@@ -38,6 +38,14 @@ export interface BranchEntity {
   createdAt: Date;
 }
 
+export interface ItemBranchCostEntity {
+  id: string;
+  tenantId: string;
+  itemId: string;
+  branchId: string;
+  cost: number;
+}
+
 export interface SupplierEntity {
   id: string;
   tenantId: string;

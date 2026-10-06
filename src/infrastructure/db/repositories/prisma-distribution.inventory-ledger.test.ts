@@ -12,6 +12,10 @@ const txMocks = vi.hoisted(() => ({
   inventoryFindFirst: vi.fn(),
   inventoryUpdate: vi.fn(),
   inventoryMovementCreate: vi.fn(),
+  // S2b: adjustments and physical counts snapshot the ADJUSTED branch's cost.
+  itemBranchCostFindMany: vi.fn(),
+  itemBranchCostFindUnique: vi.fn(),
+  itemBranchCostUpsert: vi.fn(),
   userFindFirst: vi.fn(),
 }));
 
@@ -24,6 +28,12 @@ vi.mock('@/infrastructure/db/prisma', () => {
       update: txMocks.inventoryUpdate,
     },
     inventoryMovement: { create: txMocks.inventoryMovementCreate },
+    // S2b: adjustments and counts snapshot the ADJUSTED branch's cost.
+    itemBranchCost: {
+      findMany: txMocks.itemBranchCostFindMany,
+      findUnique: txMocks.itemBranchCostFindUnique,
+      upsert: txMocks.itemBranchCostUpsert,
+    },
     user: { findFirst: txMocks.userFindFirst },
   };
   return {
@@ -89,6 +99,10 @@ beforeEach(() => {
   txMocks.inventoryFindFirst.mockResolvedValue(inventoryRow(10));
   txMocks.inventoryUpdate.mockResolvedValue(inventoryRow(8));
   txMocks.inventoryMovementCreate.mockResolvedValue(movementRow(-2, 'MERMA'));
+  // S2b: branch-1 holds the product at 30.00, so every snapshot below keeps
+  // reporting the same numbers it did when it read `Item.cost` directly.
+  txMocks.itemBranchCostFindMany.mockResolvedValue([]);
+  txMocks.itemBranchCostFindUnique.mockResolvedValue(null);
   txMocks.userFindFirst.mockResolvedValue(USER);
 });
 

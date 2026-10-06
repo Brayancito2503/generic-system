@@ -130,3 +130,200 @@ route test, `[id]` route and `BranchesView`).
   tenant-wide read whose viewer may be a manager with no `Employee` row, and
   failing that whole page would be a regression no spec asks for. Only the cash
   endpoints surface the actionable 400.
+
+---
+---
+
+# Apply Progress — distribution-lots-fefo-transfers (PR 2)
+
+**Phase:** apply (corrective retry, attempt 2) · **Slices in scope:** S2a, S2b · **Status:** complete
+
+PR 2 gives cost a BRANCH dimension: an `ItemBranchCost` model, and the reroute of
+every live `Item.cost` consumer plus **deletion** of the tenant-wide write. Builds
+on PR 1 (`27de604`).
+
+> Attempt 1 of this slice built the accessor but wired nothing to it and reported
+> `success`. It was reverted here and redone from the failing test up.
+
+---
+
+## Slice status
+
+| Slice | Scope | Status |
+|---|---|---|
+| S2a | `ItemBranchCost` entity, port method, **schema model** + M1 migration authored | done |
+| S2b | Reroute **9** `Item.cost` read sites (8 rerouted, 1 deliberately out of scope); delete the tenant-wide `tx.item.update` write | done |
+
+---
+
+## What actually changed in behavior
+
+**The tenant-wide write is gone.** `receivePurchaseOrder` no longer computes a
+weighted average against the tenant-wide `Item.cost` and writes it back. It
+resolves the RECEIVING branch's cost first, then writes only
+`ItemBranchCost(tenantId, itemId, branchId)`. `tx.item.update` is not called from
+the receive path at all.
+
+**`Item.cost` is now a frozen catalog seed.** It is written exactly once, by
+`tx.item.create` when a product is created. No code path updates it. That is a
+CREATE, not an UPDATE — the column is `NOT NULL` with no default, and M1 seeds
+every existing pair from it, so removing the seed would leave the column
+meaningless. Its only remaining role is the fallback seed in `resolveBranchCost`.
+
+**The manual cost edit moved too.** `updateInventoryItem` used to write
+`input.cost` into `Item.cost` via the catalog PATCH — a second tenant-wide write
+the slice list did not name. It now writes the named branch's `ItemBranchCost`
+and **requires a `branchId`** (400 `Debe indicar la sucursal para actualizar el
+costo` otherwise), mirroring the `minAlert` guard that already existed. `cost`
+was removed from the `itemData` payload entirely.
+
+### Read sites — measured, not estimated
+
+Enumerated by grepping `item.cost` in the repository. **9 sites**, 8 rerouted,
+1 left alone on purpose:
+
+| # | Site | Consumer | Action |
+|---|---|---|---|
+| 1 | `getInventory` | inventory list cost | one `branchCostMap` query per distinct branch; falls back to the seed |
+| 2 | `createInventoryItem` | alta response | seeds the branch cost in the same tx and reports it |
+| 3 | `updateInventoryItem` | PATCH response | reports the named branch's cost |
+| 4 | `receivePurchaseOrder` | **the weighted average** | **resolved before the write; the write is branch-scoped** |
+| 5 | `createPurchaseOrder` | PO subtotal + PO line cost | priced from the ordering branch |
+| 6 | `createInventoryAdjustment` | ledger `costSnapshot` | the adjusted branch's cost |
+| 7 | `createInventoryCountBatch` | ledger `costSnapshot` | the counted branch's cost |
+| 8 | `registerSale` | `SaleItem.cost` snapshot | the **selling** branch's cost (D11-derived) |
+| 9 | `getFiscalSummary` | fiscal profit | **NOT touched — see below** |
+
+Sites 6 and 7 were **not** in the slice brief's list of 8; the design's line
+numbers are stale and its "seven read sites" undercounts. Nine is what the file
+contains.
+
+### `getFiscalSummary` — deliberately untouched (R5)
+
+Profit is `Σ (SaleItem.price − Item.cost) × qty`: the live tenant-wide cost
+against **historical** prices. It is wrong today and still wrong, and S2b makes
+it wrong in a new static way (the scalar no longer moves on a receive).
+
+Routing it through `resolveBranchCost` would **not** fix it: the query has no
+branch dimension, so any branch cost picked there would be arbitrary *and* would
+re-introduce live re-pricing against historical prices. It needs the
+`SaleItem.cost` snapshot, which this repository already writes and which S2b has
+just re-pointed at the selling branch. Left alone, with a comment marking it.
+
+---
+
+## Files created or modified
+
+### Migrations
+
+| File | Notes |
+|---|---|
+| `prisma/migrations/20260927000000_item_branch_cost/migration.sql` | **M1.** `CREATE TABLE "ItemBranchCost"` + seed from `Item.cost` per existing `(tenantId,itemId,branchId)` in `Inventory`, plus indexes, FKs and a reversal note. **Authored only, never applied.** |
+| `prisma/migrations/20260927000000_item_branch_cost/README.md` | Notes for M1. |
+
+### Schema
+
+| File | Change |
+|---|---|
+| `prisma/schema.prisma` | **Added the missing `model ItemBranchCost`** — see the note below. Attempt 1 added the three relations but never the model, so `npx prisma validate` FAILED on this tree and `prisma generate` had no `itemBranchCost` delegate. `npm test` / `typecheck` / `lint` do not run `prisma validate`, which is how a broken schema passed three gates. |
+
+### Core (`src/core`)
+
+| File | Change |
+|---|---|
+| `src/core/entities/distribution.ts` | `ItemBranchCostEntity`. |
+| `src/core/ports/distribution-repository.port.ts` | `getItemBranchCost()` on the port. |
+
+### Infrastructure (`src/infrastructure`)
+
+| File | Change |
+|---|---|
+| `.../prisma-distribution.repository.ts` | New `BranchCostDb` type + `branchCostMap` / `resolveBranchCost` / `writeBranchCost` helpers. Receive, inventory, alta, PATCH, PO create, sale, adjustment and count-batch rerouted. Tenant-wide write deleted. `getItemBranchCost` normalized (the inline `import('...')` type and the `globalThis.prisma` fallback hack are gone; it uses the typed client and the compound unique). |
+| `.../prisma-distribution.branch-cost.test.ts` | **Rewritten.** 13 tests: cross-branch isolation, the same-branch weighted average, 2dp rounding, first arrival into an empty branch, the manual branch-scoped PATCH (accepted with a branch, rejected with a 400 without one), plus one behavioral test per rerouted read site. |
+
+### Mock surfaces (5 files)
+
+`itemBranchCost: { findMany, findUnique, upsert }` added to the mocked Prisma
+client — the same mock-surface growth PR 1 recorded for D11.
+
+| File | Change |
+|---|---|
+| `.../fractional.test.ts` | Mock surface; **the assertion that pinned the deleted `item.update({ data: { cost } })` now asserts the branch-scoped `upsert` and `itemUpdate` not called.** |
+| `.../inventory-ledger.test.ts` | Mock surface. |
+| `.../sale-unit.test.ts` | Mock surface. |
+| `.../session-binding.test.ts` | Mock surface. |
+| `.../velocity-sort.test.ts` | Mock surface; renamed the now-false test "reports cost from the catalog while the branch cost model is still unbuilt" → "reports the frozen catalog seed for a branch with no `ItemBranchCost` row yet", and added a test that two branches of one product report different costs. |
+
+### Untouched
+
+`README.md`, `docs/` (own commit `cb52510`). No `messages/*.json` change: the new
+400 is a repository `ApiError`, and every sibling repository error is a Spanish
+literal rather than a next-intl key.
+
+---
+
+## Work unit evidence
+
+### RED → GREEN
+
+| Stage | Command | Result |
+|---|---|---|
+| Baseline | `npm test` | 31 files, **275** tests passed |
+| Schema gate | `npx prisma validate` | **FAILED** — `Type "ItemBranchCost" is neither a built-in type…` (×3) |
+| RED (written first) | `npx vitest run …branch-cost.test.ts` | **7 failed / 3 passed** (of the 10 tests written first) |
+| GREEN (focused) | `npx vitest run …branch-cost.test.ts` | **13 passed (13/13)** — the 2 `updateInventoryItem` PATCH tests were added after the first GREEN, so RED was re-observed for them at 2 failed / 11 passed before wiring |
+| GREEN (full) | `npm test` | 31 files, **287** tests passed (12.38s) — baseline 275 + 12 net |
+| Typecheck | `npm run typecheck` (`tsc --noEmit`) | clean |
+| Lint | `npm run lint` (ESLint 9) | clean |
+| Schema gate | `npx prisma validate` | **valid** |
+| Client | `npx prisma generate` | ran with **no `next dev`** process alive (G3) |
+
+Runtime harness: **N/A** — no live database. No `migrate dev`, `migrate reset`,
+`db push` or `migrate deploy` ran, and no live-DB query was made (G1). The
+branch-cost behavior is proven against a mocked Prisma client, which cannot
+express a partial index nor real concurrency; see the residual risks below.
+
+### Rollback boundary
+
+- **S2b (code only, no DDL):** revert `prisma-distribution.repository.ts` to
+  read/write `Item.cost`, drop the three helpers, and revert the six test files'
+  mock surfaces. `ItemBranchCost` rows become orphaned but harmless — M1 is
+  independent and can stay applied.
+- **S2a (model + M1):** `DROP TABLE "ItemBranchCost"` (cascades its indexes and
+  FKs) plus a code revert. Nothing else in the system reads it.
+- No rollback touches PR 1's branch/session work.
+
+### Diff
+
+`git diff --stat` (tracked): **10 files changed, 624 insertions(+), 34 deletions(-)**,
+of which **198** is this PR 2 record. Code and tests are the remaining ~426.
+Untracked and new: `migration.sql` 41, migration `README.md` 6,
+`branch-cost.test.ts` 499.
+
+---
+
+## Residual risks and deferred work
+
+- **M1 is authored, NOT applied.** The app reads `ItemBranchCost` on every
+  inventory, PO, sale and adjustment path, so the DDL must be applied over
+  `DIRECT_URL` before this code runs — per `DATABASE.md:25-29`, not via
+  `prisma migrate`. Until then the code degrades to the frozen `Item.cost` seed
+  and behaves exactly as it does today (no crash only because the table is
+  queried, not assumed: **if the table does not exist, every one of these paths
+  throws**). The seed fallback covers a missing ROW, not a missing TABLE.
+- **A branch created after M1 gets no `ItemBranchCost` rows.** PR 1 provisions
+  zero-stock `Inventory` rows for existing products on branch creation and this
+  slice did not extend that to costs. Those pairs report the frozen catalog seed
+  until their first receive, which then adopts the incoming cost. Deterministic
+  and not a wrong-number-where-a-right-one-existed case (no branch cost has ever
+  been written for them), but it is a visible gap.
+- **`getFiscalSummary` (R5) is still wrong**, now statically instead of
+  live-mutating. Needs the `SaleItem.cost` snapshot, not a branch-scoped read.
+- **The CI mock cannot prove the M1 seed.** `$transaction: fn => fn(tx)` and a
+  hand-written `itemBranchCost` mock say nothing about the real
+  `INSERT … SELECT … WHERE NOT EXISTS` idempotency, nor about the unique index
+  under concurrency. Live-DB evidence for M1 is still an operator gate.
+- **No machine-readable error code** for the new 400. Pre-existing **R13**.
+- **`Item.cost` is now dead weight** for every pair M1 covered. It is kept only
+  as the create-time seed and the missing-row fallback; a later slice can drop
+  the column once no path reads it as a fallback.

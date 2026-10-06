@@ -53,6 +53,7 @@ import type {
   InventoryMovementType,
   InventoryStockItem,
   InventorySort,
+  ItemBranchCostEntity,
   MermaSummary,
   PaginatedResult,
   PaymentMethod,
@@ -252,6 +253,86 @@ function firstBranchOfTenant(tenantId: string, branchId?: string) {
     return prisma.branch.findFirst({ where: { id: branchId, tenantId } });
   }
   return prisma.branch.findFirst({ where: { tenantId }, orderBy: { createdAt: 'asc' } });
+}
+
+/**
+ * The only model the branch-cost helpers touch, so the SAME helpers serve
+ * `prisma` (read paths) and the `tx` of a write path. Same technique as
+ * `DerivedBranchDb`.
+ */
+type BranchCostDb = Pick<Prisma.TransactionClient, 'itemBranchCost'>;
+
+/**
+ * Branch-scoped unit costs for a set of items AT ONE branch, keyed by itemId.
+ *
+ * One query for the whole set, never one query per item: a 200-line purchase
+ * order or sale must not become 200 round-trips.
+ */
+async function branchCostMap(
+  db: BranchCostDb,
+  tenantId: string,
+  itemIds: string[],
+  branchId: string
+): Promise<Map<string, Prisma.Decimal>> {
+  if (itemIds.length === 0) {
+    return new Map();
+  }
+  const rows = await db.itemBranchCost.findMany({
+    where: { tenantId, branchId, itemId: { in: itemIds } },
+    select: { itemId: true, cost: true },
+  });
+  return new Map(rows.map((r) => [r.itemId, r.cost]));
+}
+
+/**
+ * The cost of one item AT one branch, or `seed` when the pair carries no
+ * `ItemBranchCost` row.
+ *
+ * `seed` is `Item.cost`, which from S2b onward is a FROZEN catalog value written
+ * once at Item creation and never updated. It is only a fallback, never a live
+ * cross-branch read:
+ *   - before M1 is applied the fallback keeps behavior byte-identical to the old
+ *     tenant-wide scalar, so shipping the code and the DDL together is safe;
+ *   - M1 seeds one row per existing `(tenantId, itemId, branchId)` pair with
+ *     exactly that value, so cutover shifts no reported margin;
+ *   - a pair with no row has never had a branch cost written, so there is no
+ *     branch value this could be overwriting.
+ *
+ * A product whose first receive lands here adopts the incoming line cost — see
+ * `receivePurchaseOrder`.
+ */
+async function resolveBranchCost(
+  db: BranchCostDb,
+  tenantId: string,
+  itemId: string,
+  branchId: string,
+  seed: Prisma.Decimal
+): Promise<Prisma.Decimal> {
+  const row = await db.itemBranchCost.findUnique({
+    where: { tenantId_itemId_branchId: { tenantId, itemId, branchId } },
+    select: { cost: true },
+  });
+  return row?.cost ?? seed;
+}
+
+/**
+ * Writes the cost of one item AT one branch — the ONLY cost write in this file.
+ *
+ * Upsert because a first arrival creates the pair and every later receive
+ * re-averages it, both inside the same call shape.
+ */
+async function writeBranchCost(
+  db: BranchCostDb,
+  tenantId: string,
+  itemId: string,
+  branchId: string,
+  cost: Prisma.Decimal
+): Promise<void> {
+  await db.itemBranchCost.upsert({
+    where: { tenantId_itemId_branchId: { tenantId, itemId, branchId } },
+    create: { tenantId, itemId, branchId, cost },
+    update: { cost },
+  });
 }
 
 /**
@@ -682,6 +763,14 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     });
 
     const unitsSold30d = await this.getUnitsSoldLast30d(tenantId);
+    // Branch-scoped costs: ONE query per distinct branch, never one per row, so
+    // a 400-row catalog across 3 branches is 3 round-trips. A pair with no row
+    // falls back to the frozen `Item.cost` seed.
+    const costMaps = new Map<string, Map<string, Prisma.Decimal>>();
+    for (const branchId of new Set(rows.map((r) => r.branchId))) {
+      const itemIds = [...new Set(rows.filter((r) => r.branchId === branchId).map((r) => r.itemId))];
+      costMaps.set(branchId, await branchCostMap(prisma, tenantId, itemIds, branchId));
+    }
     const items = rows.map((row) => ({
       // `id` stays the PRODUCT id: every catalog mutation (PATCH/DELETE
       // /inventory/[id]) resolves the item, not the stock row. The stock row is
@@ -692,7 +781,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       sku: row.item.sku,
       name: row.item.name,
       description: row.item.description,
-      cost: row.item.cost.toNumber(),
+      cost: (costMaps.get(row.branchId)?.get(row.itemId) ?? row.item.cost).toNumber(),
       price: row.item.price.toNumber(),
       stock: row.stock.toNumber(),
       minAlert: row.minAlert,
@@ -743,15 +832,19 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       sku = await nextItemSku(tenantId);
     }
 
-    // Item + Inventory row + the INITIAL kardex row land in ONE transaction:
-    // a new product always starts with its ledger origin.
-    const { item, inv } = await prisma.$transaction(async (tx) => {
+    // Item + Inventory row + the INITIAL kardex row + the branch-scoped
+    // cost land in ONE transaction: a new product always starts with its ledger
+    // origin and with a branch cost that matches it.
+    const { item, inv, branchCost } = await prisma.$transaction(async (tx) => {
       const item = await tx.item.create({
         data: {
           tenantId,
           sku,
           name: input.name,
           description: input.description || null,
+          // FROZEN catalog seed (see `resolveBranchCost`). This is the only
+          // place `Item.cost` is written, and it is a CREATE, not an update:
+          // nothing re-prices it afterwards.
           cost: input.cost,
           price: input.price,
           isService: false,
@@ -771,6 +864,12 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         },
       });
 
+      // The product's cost belongs to the branch it landed in, not to the
+      // tenant. Seeded from the same `input.cost` so the response, the ledger
+      // row and the branch cost all report one number.
+      const seededCost = new Prisma.Decimal(input.cost);
+      await writeBranchCost(tx, tenantId, item.id, branch.id, seededCost);
+
       await recordMovement(tx, {
         tenantId,
         branchId: branch.id,
@@ -782,7 +881,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         notes: 'Stock inicial',
       });
 
-      return { item, inv };
+      return { item, inv, branchCost: seededCost };
     });
 
     return {
@@ -794,7 +893,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       sku: item.sku,
       name: item.name,
       description: item.description,
-      cost: item.cost.toNumber(),
+      cost: branchCost.toDecimalPlaces(2).toNumber(),
       price: item.price.toNumber(),
       stock: inv.stock.toNumber(),
       minAlert: inv.minAlert,
@@ -830,17 +929,18 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       sku?: string | null;
       name?: string;
       description?: string | null;
-      cost?: number;
       price?: number;
       saleUnit?: 'UNIDAD' | 'LIBRA' | 'KILOGRAMO' | null;
     } = {};
     if (input.sku !== undefined) itemData.sku = input.sku || null;
     if (input.name !== undefined) itemData.name = input.name;
     if (input.description !== undefined) itemData.description = input.description || null;
-    if (input.cost !== undefined) itemData.cost = input.cost;
     if (input.price !== undefined) itemData.price = input.price;
     // undefined = untouched; null = back to legacy piece-based units.
     if (input.saleUnit !== undefined) itemData.saleUnit = input.saleUnit;
+
+    // `cost` is NOT in `itemData`: it is branch-scoped from S2b onward and is
+    // written to `ItemBranchCost` below, never to the tenant-wide `Item.cost`.
 
     if (itemData.sku && itemData.sku !== existing.sku) {
       const skuConflict = await prisma.item.findFirst({
@@ -887,6 +987,43 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       data: itemData,
     });
 
+    // The manual cost edit is the other branch-scoped write. It requires the
+    // same `branchId` the minAlert edit already required, because "change the
+    // cost of this product" is not a tenant-wide fact: naming it without a
+    // branch is exactly the ambiguity S2b removes. The guard is duplicated in
+    // the route; this is the hard second one.
+    if (input.cost !== undefined) {
+      if (input.branchId === undefined) {
+        throw new ApiError(
+          400,
+          'Debe indicar la sucursal para actualizar el costo'
+        );
+      }
+      await writeBranchCost(
+        prisma,
+        tenantId,
+        itemId,
+        input.branchId,
+        new Prisma.Decimal(input.cost)
+      );
+    }
+
+    // The response reports the branch the caller named; a catalog-only edit has
+    // no branch, so it reports the seed unchanged rather than inventing one.
+    const reportedBranchId = input.branchId ?? inv?.branchId;
+    const reportedCost =
+      input.cost !== undefined && reportedBranchId !== undefined
+        ? new Prisma.Decimal(input.cost)
+        : reportedBranchId === undefined
+          ? item.cost
+          : await resolveBranchCost(
+              prisma,
+              tenantId,
+              itemId,
+              reportedBranchId,
+              item.cost
+            );
+
     const stock = inv?.stock.toNumber() ?? 0;
     const minAlert = inv?.minAlert ?? input.minAlert ?? 0;
 
@@ -896,11 +1033,11 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       // The stock row this response actually reflects: the branch the caller
       // targeted, else the product's first stock row (catalog-only edit), else
       // '' for a product that has no stock row at all.
-      branchId: input.branchId ?? inv?.branchId ?? '',
+      branchId: reportedBranchId ?? '',
       sku: item.sku,
       name: item.name,
       description: item.description,
-      cost: item.cost.toNumber(),
+      cost: reportedCost.toDecimalPlaces(2).toNumber(),
       price: item.price.toNumber(),
       stock,
       minAlert,
@@ -1141,17 +1278,34 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         // tx with Decimal (exact on fractions):
         // newCost = (oldStock·oldCost + qty·lineCost) / (oldStock + qty);
         // a first arrival (oldStock = 0) simply adopts the line cost.
+        //
+        // `oldCost` is this BRANCH's cost, resolved BEFORE the write. Reading the
+        // tenant-wide `Item.cost` here is the defect S2b removes: a receive into
+        // branch B was averaging against (and then overwriting) a scalar that
+        // every branch of the product shares, so branch A's cost silently moved.
+        const oldCost = await resolveBranchCost(
+          tx,
+          tenantId,
+          line.itemId,
+          po.branchId,
+          item.cost
+        );
         const newCost = inventory.stock.isZero()
           ? lineCost
           : inventory.stock
-              .times(item.cost)
+              .times(oldCost)
               .plus(qty.times(lineCost))
               .dividedBy(inventory.stock.plus(qty));
 
-        await tx.item.update({
-          where: { id: item.id },
-          data: { cost: newCost.toDecimalPlaces(2) },
-        });
+        // The ONLY cost write: branch-scoped. `tx.item.update` is deliberately
+        // absent — no code path updates `Item.cost` any more.
+        await writeBranchCost(
+          tx,
+          tenantId,
+          line.itemId,
+          po.branchId,
+          newCost.toDecimalPlaces(2)
+        );
         await tx.inventory.update({
           where: { id: inventory.id },
           data: { stock: { increment: qty } },
@@ -1266,15 +1420,24 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     }
     const itemById = new Map(items.map((i) => [i.id, i] as const));
 
+    // Line costs come from the ORDERING branch, not from the tenant-wide seed:
+    // a PO for branch B is valued at what the product costs in branch B. One
+    // query for every line, then each line falls back to the frozen seed.
+    const branchCosts = await branchCostMap(
+      prisma,
+      tenantId,
+      lines.map((l) => l.itemId),
+      branch.id
+    );
+    const lineCostFor = (itemId: string): Prisma.Decimal =>
+      branchCosts.get(itemId) ?? itemById.get(itemId)!.cost;
+
     const order = await prisma.$transaction(async (tx) => {
       // PO value is priced at item cost; tax is extracted inclusively with the
       // tenant's default rate, mirroring the registerSale money model. Decimal
       // multiplication keeps fraction × cost exact (e.g. 2.5 × 2500 = 6250).
       const subtotal = lines.reduce((acc, l) => {
-        const item = itemById.get(l.itemId);
-        return item
-          ? acc.plus(item.cost.times(new Prisma.Decimal(l.quantity)))
-          : acc;
+        return acc.plus(lineCostFor(l.itemId).times(new Prisma.Decimal(l.quantity)));
       }, new Prisma.Decimal(0));
 
       const defaultTax =
@@ -1316,7 +1479,9 @@ export class PrismaDistributionRepository implements IDistributionRepository {
             create: lines.map((l) => ({
               itemId: l.itemId,
               quantity: l.quantity,
-              cost: itemById.get(l.itemId)!.cost,
+              // The line freezes the branch-scoped cost at order time, so the
+              // receive averages against what was actually ordered.
+              cost: lineCostFor(l.itemId),
             })),
           },
         },
@@ -1978,6 +2143,32 @@ export class PrismaDistributionRepository implements IDistributionRepository {
     });
   }
 
+  /**
+   * Reads the branch-scoped cost row itself, for callers that need the row's
+   * identity or its absence. Cost CONSUMERS should use `resolveBranchCost`,
+   * which supplies the frozen-seed fallback; this method deliberately returns
+   * `undefined` rather than inventing a value, because "no row" is a real,
+   * meaningful state (the pair has never been priced).
+   */
+  async getItemBranchCost(
+    tenantId: string,
+    itemId: string,
+    branchId: string
+  ): Promise<ItemBranchCostEntity | undefined> {
+    const row = await prisma.itemBranchCost.findUnique({
+      where: { tenantId_itemId_branchId: { tenantId, itemId, branchId } },
+    });
+    return row
+      ? {
+          id: row.id,
+          tenantId: row.tenantId,
+          itemId: row.itemId,
+          branchId: row.branchId,
+          cost: row.cost.toNumber(),
+        }
+      : undefined;
+  }
+
   async getFiscalSummary(tenantId: string): Promise<FiscalSummary> {
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -2003,6 +2194,21 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       }),
     ]);
 
+    // ⚠️ KNOWN DEFECT (R5) — DELIBERATELY NOT FIXED HERE, DO NOT "FIX" IT BY
+    // ROUTING IT THROUGH `resolveBranchCost`.
+    //
+    // Profit is `Σ (SaleItem.price − Item.cost) × qty`: the LIVE tenant-wide
+    // cost against HISTORICAL prices. The correct source is the `SaleItem.cost`
+    // snapshot this very repository already writes (and which S2b has just
+    // re-pointed at the selling branch). Until that lands, `Item.cost` is frozen
+    // (S2b stopped writing it), so this figure no longer moves on a receive —
+    // it is now simply wrong in a different, static way.
+    //
+    // Routing it through the branch accessor would NOT fix it: there is no
+    // branch dimension in this query at all, so any branch cost picked here
+    // would be an arbitrary one, and would re-introduce live re-pricing against
+    // historical prices. It needs the snapshot, not a branch. See
+    // openspec/changes/distribution-lots-fefo-transfers (R5).
     const profit = saleItems.reduce(
       (acc, si) =>
         acc.plus(si.price.minus(si.item.cost).times(si.quantity)),
@@ -2272,6 +2478,15 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       }
       const itemById = new Map(items.map((i) => [i.id, i] as const));
 
+      // The SaleItem cost snapshot is the cost in the SELLING branch (the one
+      // D11 just derived), not the tenant-wide seed. One query for every line.
+      const branchCosts = await branchCostMap(
+        tx,
+        tenantId,
+        lines.map((l) => l.itemId),
+        branchId
+      );
+
       if (input.personId) {
         customer = await tx.person.findFirst({
           where: { tenantId, id: input.personId },
@@ -2385,9 +2600,10 @@ export class PrismaDistributionRepository implements IDistributionRepository {
                 itemId: item.id,
                 quantity: l.quantity,
                 price: item.price,
-                // Cost snapshot at sale time: daily close margins stay
-                // accurate even when Item.cost changes later.
-                cost: item.cost,
+                // Cost snapshot at sale time, from the selling branch's cost:
+                // daily close margins stay accurate even when another branch's
+                // receive re-averages the product later.
+                cost: branchCosts.get(l.itemId) ?? item.cost,
               };
             }),
           },
@@ -3084,6 +3300,18 @@ export class PrismaDistributionRepository implements IDistributionRepository {
         where: { id: inventory.id },
         data: { stock: { increment: input.quantity } },
       });
+
+      // An adjustment never re-prices: the ledger row freezes the cost the
+      // ADJUSTED branch already carries, so merma totals stay that branch's
+      // truth and no other branch moves.
+      const branchCost = await resolveBranchCost(
+        tx,
+        tenantId,
+        input.itemId,
+        input.branchId,
+        item.cost
+      );
+
       const movement = await tx.inventoryMovement.create({
         data: {
           tenantId,
@@ -3092,7 +3320,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
           type: 'ADJUSTMENT',
           quantity: input.quantity,
           reason: input.reason,
-          costSnapshot: item.cost,
+          costSnapshot: branchCost,
           notes: input.notes ?? null,
           userId: input.userId,
         },
@@ -3139,6 +3367,15 @@ export class PrismaDistributionRepository implements IDistributionRepository {
       });
       if (!branch) throw new ApiError(404, 'Sucursal no encontrada');
 
+      // A physical count never re-prices either: the ledger row freezes the
+      // cost the COUNTED branch already carries.
+      const branchCosts = await branchCostMap(
+        tx,
+        tenantId,
+        input.items.map((i) => i.itemId),
+        input.branchId
+      );
+
       for (const item of input.items) {
         const inventory = await tx.inventory.findFirst({
           where: { tenantId, branchId: input.branchId, itemId: item.itemId },
@@ -3174,7 +3411,7 @@ export class PrismaDistributionRepository implements IDistributionRepository {
             type: 'ADJUSTMENT',
             quantity: diff,
             reason,
-            costSnapshot: item0.cost,
+            costSnapshot: branchCosts.get(item.itemId) ?? item0.cost,
             notes: 'Diferencia por conteo físico',
             userId: input.userId,
           },

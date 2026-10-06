@@ -18,6 +18,7 @@ import type {
   InventoryMovementType,
   InventoryStockItem,
   InventorySort,
+  ItemBranchCostEntity,
   ItemSaleUnit,
   MermaSummary,
   PaginatedResult,
@@ -559,4 +560,13 @@ export interface IDistributionRepository {
     tenantId: string,
     filter?: { branchId?: string; from?: Date; to?: Date }
   ): Promise<MermaSummary>;
+
+  /**
+   * Returns the branch-scoped cost for an item at a branch, or undefined if none exists.
+   */
+  getItemBranchCost(
+    tenantId: string,
+    itemId: string,
+    branchId: string
+  ): Promise<ItemBranchCostEntity | undefined>;
 }
